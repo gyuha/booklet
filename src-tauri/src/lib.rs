@@ -1,3 +1,6 @@
+mod state;
+
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
@@ -20,12 +23,34 @@ fn take_pending_book(state: tauri::State<'_, PendingOpen>) -> Option<String> {
     state.0.lock().ok()?.take()
 }
 
+fn state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_config_dir()
+        .map(|dir| dir.join("state.json"))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn load_state(app: tauri::AppHandle) -> Result<state::AppState, String> {
+    Ok(state::load(&state_path(&app)?))
+}
+
+#[tauri::command]
+fn save_state(app: tauri::AppHandle, next: state::AppState) -> Result<(), String> {
+    state::save(&state_path(&app)?, &next)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(PendingOpen::default())
-        .invoke_handler(tauri::generate_handler![read_book, take_pending_book])
+        .invoke_handler(tauri::generate_handler![
+            read_book,
+            take_pending_book,
+            load_state,
+            save_state
+        ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 

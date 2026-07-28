@@ -159,3 +159,112 @@ test("두 번째 책을 열면 이전 책이 교체된다", async ({ page }) => 
   expect(tocB.length, "두 번째 책의 목차가 비었다").toBeGreaterThanOrEqual(2);
   expect(tocB, "두 번째 책을 열었는데 목차가 그대로다").not.toEqual(tocA);
 });
+
+// 읽던 위치 복원 (part 2/2 S4). view.init({lastLocation}) 이 CFI 를 실제로
+// 해석해 그 섹션으로 돌아가는지 확인한다. CFI 는 페이지 단위로 미세하게 달라질 수
+// 있으므로 "!" 앞의 **섹션 경로**가 일치하는지로 판정한다.
+test("읽던 위치를 CFI 로 복원한다", async ({ page }) => {
+  const section = (cfi: string) => cfi.split("!")[0];
+
+  await page.goto("/check.html");
+  await page.evaluate(() => (window as any).check.openUrl("/fixtures/a.epub"));
+  await expect
+    .poll(() => page.evaluate(() => (window as any).check.openCount), {
+      timeout: 60_000,
+    })
+    .toBe(1);
+
+  // 첫 섹션(표지)이 아닌 곳으로 이동해 복원할 지점을 만든다.
+  await expect.poll(() => lastCfi(page), { timeout: 30_000 }).not.toBeNull();
+  const initial = (await lastCfi(page)) as string;
+
+  const toc: { href: string }[] = await page.evaluate(() =>
+    (window as any).check.toc().map((i: any) => ({ href: i.href })),
+  );
+  const base = (h: string) => h.split("#")[0];
+  const target = toc.find((i) => base(i.href) !== base(toc[0].href));
+  expect(target, "이동할 다른 섹션이 없다").toBeTruthy();
+  await goTo(page, target!.href);
+
+  await expect
+    .poll(
+      async () => {
+        const c = await lastCfi(page);
+        return c && section(c) !== section(initial) ? c : null;
+      },
+      { timeout: 30_000 },
+    )
+    .not.toBeNull();
+  const saved = (await lastCfi(page)) as string;
+
+  // 같은 책을 그 지점으로 다시 연다.
+  await page.evaluate(
+    (cfi) => (window as any).check.openUrl("/fixtures/a.epub", cfi),
+    saved,
+  );
+  await expect
+    .poll(() => page.evaluate(() => (window as any).check.openCount), {
+      timeout: 60_000,
+    })
+    .toBe(2);
+
+  await expect
+    .poll(
+      async () => {
+        const c = await lastCfi(page);
+        return c && section(c) === section(saved) ? c : null;
+      },
+      { timeout: 30_000 },
+    )
+    .not.toBeNull();
+
+  const restored = (await lastCfi(page)) as string;
+  expect(
+    section(restored),
+    `복원 위치의 섹션이 저장 위치와 다르다: ${restored} vs ${saved}`,
+  ).toBe(section(saved));
+});
+
+// 글꼴 크기 조절 (part 2/2 S3). reader.setFontScale 이 주입 스타일을 실제로 바꿔
+// 본문 문서의 계산된 font-size 가 커지는지 확인한다.
+// (Playwright 는 shadow DOM 을 넘어 iframe 에 접근할 수 있어 이 단언이 가능하다.
+//  WKWebView 하네스에서는 closed shadow root 때문에 불가능하므로 C8 에는 없다.)
+test("글꼴 배율이 본문에 실제로 반영된다", async ({ page }) => {
+  const htmlFontSize = async () => {
+    const frames = page.frames().filter((f) => f !== page.mainFrame());
+    const sizes = await Promise.all(
+      frames.map((f) =>
+        f
+          .evaluate(
+            () =>
+              parseFloat(
+                getComputedStyle(document.documentElement).fontSize || "0",
+              ) || 0,
+          )
+          .catch(() => 0),
+      ),
+    );
+    return Math.max(0, ...sizes);
+  };
+
+  await page.goto("/check.html");
+  await page.evaluate(() => (window as any).check.openUrl("/fixtures/a.epub"));
+  await expect
+    .poll(() => page.evaluate(() => (window as any).check.openCount), {
+      timeout: 60_000,
+    })
+    .toBe(1);
+
+  await expect.poll(htmlFontSize, { timeout: 30_000 }).toBeGreaterThan(0);
+  const base = await htmlFontSize();
+
+  await page.evaluate(() => (window as any).check.reader.setFontScale(1.6));
+  await expect
+    .poll(htmlFontSize, { timeout: 30_000 })
+    .toBeGreaterThan(base * 1.3);
+
+  await page.evaluate(() => (window as any).check.reader.setFontScale(1));
+  await expect
+    .poll(htmlFontSize, { timeout: 30_000 })
+    .toBeLessThan(base * 1.1);
+});

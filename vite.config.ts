@@ -1,6 +1,40 @@
 import { defineConfig, type Plugin } from "vite";
+import { createReadStream, existsSync } from "node:fs";
+import { homedir } from "node:os";
 
 const host = process.env.TAURI_DEV_HOST;
+
+/**
+ * 검증용 샘플 epub 을 개발 서버에서 /fixtures/{a,b}.epub 으로 서빙한다.
+ *
+ * check.html 을 WKWebView 하네스(C8)로 구동할 때는 <input type=file> 을 조작할 수 없어
+ * fetch 로 책을 가져와야 한다. 22MB 파일을 프로젝트로 복사하거나 server.fs.allow 를
+ * 넓히는 대신 미들웨어로 스트리밍한다.
+ *
+ * configureServer 훅이므로 **개발 서버 전용** — 배포 빌드에는 흔적이 남지 않는다.
+ */
+const serveEpubFixtures = (): Plugin => {
+  const samples: Record<string, string> = {
+    "a.epub":
+      process.env.BOOKLET_SAMPLE_EPUB ??
+      `${homedir()}/Downloads/내면 근력 결국 멘탈 게임이다.epub`,
+    "b.epub":
+      process.env.BOOKLET_SAMPLE_EPUB2 ??
+      `${homedir()}/Downloads/신 퇴마록 신세편 1.epub`,
+  };
+  return {
+    name: "serve-epub-fixtures",
+    configureServer(server) {
+      server.middlewares.use("/fixtures", (req, res, next) => {
+        const name = (req.url ?? "").replace(/^\//, "").split("?")[0];
+        const file = samples[name];
+        if (!file || !existsSync(file)) return next();
+        res.setHeader("Content-Type", "application/epub+zip");
+        createReadStream(file).pipe(res);
+      });
+    },
+  };
+};
 
 /**
  * foliate-js 의 PDF 지원을 번들에서 잘라낸다. **제거하면 빌드가 깨진다 — 필수다.**
@@ -37,7 +71,7 @@ const stubFoliatePdf = (): Plugin => {
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [stubFoliatePdf()],
+  plugins: [stubFoliatePdf(), serveEpubFixtures()],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

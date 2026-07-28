@@ -73,3 +73,66 @@ foliate-view {
   width: 100%;
   height: 100%;
 }
+
+/* ─────────────── 목차 패널 ─────────────── */
+
+#toc-toggle {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 20;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  color: #555;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+#toc-toggle:hover {
+  background: #fff;
+  color: #111;
+}
+
+#toc-toggle[hidden] {
+  display: none;
+}
+
+#toc {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 15;
+  width: 280px;
+  padding: 48px 0 16px;
+  overflow-y: auto;
+  background: #fafafa;
+  border-right: 1px solid #e0e0e0;
+}
+
+#toc[hidden] {
+  display: none;
+}
+
+.toc-item {
+  display: block;
+  width: 100%;
+  padding: 8px 16px;
+  font: inherit;
+  font-size: 0.88rem;
+  text-align: left;
+  color: #333;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.toc-item:hover {
+  background: #ececec;
+  color: #000;
+}

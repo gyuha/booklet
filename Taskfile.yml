@@ -114,16 +114,16 @@ tasks:
       - /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/booklet.app
       - task: handlers
 
-  # ─────────────── 스톱 조건 체크 (.forge/loop.md C1–C7) ───────────────
+  # ─────────────── 스톱 조건 체크 (.forge/loop.md C1–C9) ───────────────
 
   check:
-    desc: C1–C7 전부 실행. 하나 실패해도 계속 돌리고 마지막에 실패 목록을 낸다
+    desc: C1–C9 전부 실행. 하나 실패해도 계속 돌리고 마지막에 실패 목록을 낸다
     silent: true
     cmds:
       - |
-        # 순서 주의: C1(빌드)이 C5·C7 의 산출물을 만든다.
+        # 순서 주의: C1(빌드)이 C5·C7·C9 의 산출물을 만든다.
         failed=""
-        for c in c2 c6 c3 c4 c1 c5 c7; do
+        for c in c2 c6 c3 c8 c4 c1 c5 c7 c9; do
           echo ""
           echo "──────── $c ────────"
           if task "check:$c"; then
@@ -136,7 +136,7 @@ tasks:
         echo ""
         echo "════════ 결과 ════════"
         if [ -z "$failed" ]; then
-          echo "전부 통과 (C1–C7)"
+          echo "전부 통과 (C1–C9)"
         else
           echo "실패:$failed"
           exit 1
@@ -160,7 +160,7 @@ tasks:
       - pnpm exec playwright test
 
   check:c4:
-    desc: "C4 상태 영속성 — Rust 단위 테스트 3개 이상 (part 2/2 에서 채워짐)"
+    desc: "C4 상태 영속성 — Rust 단위 테스트 3개 이상"
     cmds:
       - bash scripts/checks/state-tests.sh
 
@@ -178,3 +178,13 @@ tasks:
     desc: "C7 실행 생존 — .app 이 뜨고 5초를 버티는가"
     cmds:
       - bash scripts/checks/launch-survives.sh
+
+  check:c8:
+    desc: "C8 WKWebView 렌더링 — 실앱과 같은 엔진에서 동작하는가 (GUI 권한 불필요)"
+    cmds:
+      - bash scripts/checks/wkwebview-render.sh
+
+  check:c9:
+    desc: "C9 실앱 종단 — 이어보기·위치 복원·두 번째 책을 state.json 으로 관측"
+    cmds:
+      - bash scripts/checks/app-state-e2e.sh

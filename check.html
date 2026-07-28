@@ -48,11 +48,31 @@
         toc: () => flattenToc(reader.toc()).filter((i) => i.href),
       };
 
-      document.querySelector("#file").addEventListener("change", async (e) => {
-        await reader.open(e.target.files[0]);
+      const opened = async (blob, lastLocation) => {
+        await reader.open(blob, lastLocation);
         window.check.opened = true;
         window.check.openCount += 1;
-      });
+      };
+
+      document.querySelector("#file").addEventListener("change", (e) =>
+        opened(e.target.files[0]),
+      );
+
+      // WKWebView 하네스(C8)용 진입점. <input type=file> 을 네이티브에서 조작할 수
+      // 없으므로 URL 로 받아 fetch 한다. /fixtures/*.epub 은 vite 미들웨어가 서빙한다.
+      window.check.openUrl = async (url, lastLocation) => {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`${url} → HTTP ${res.status}`);
+        // foliate 의 makeBook 은 file.name 으로 포맷을 판별한다. Blob 에는 name 이
+        // 없으므로 File 로 감싸야 한다 (main.ts 가 하는 것과 동일).
+        const name = url.split("/").pop();
+        await opened(
+          new File([await res.blob()], name, {
+            type: "application/epub+zip",
+          }),
+          lastLocation,
+        );
+      };
     </script>
   </body>
 </html>
