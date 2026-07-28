@@ -268,3 +268,89 @@ test("글꼴 배율이 본문에 실제로 반영된다", async ({ page }) => {
     .poll(htmlFontSize, { timeout: 30_000 })
     .toBeLessThan(base * 1.1);
 });
+
+// 마우스 휠로 페이지 넘김. 키보드와 같은 함정이 있다 — 본문은 섹션 iframe 이라
+// 커서가 본문 위에 있으면 최상위 문서에는 wheel 이 도달하지 않는다.
+// 그래서 (1) 본문 위에서 굴리기 (2) 클릭해 포커스를 iframe 으로 옮긴 뒤 굴리기
+// 두 경우를 모두 확인한다.
+test("마우스 휠로 이전/다음 페이지로 이동한다", async ({ page }) => {
+  await page.goto("/check.html");
+  await page.evaluate(() => (window as any).check.openUrl("/fixtures/a.epub"));
+  await expect
+    .poll(() => page.evaluate(() => (window as any).check.openCount), {
+      timeout: 60_000,
+    })
+    .toBe(1);
+  await expect.poll(() => lastCfi(page), { timeout: 30_000 }).not.toBeNull();
+
+  const viewport = page.viewportSize()!;
+  const cx = Math.round(viewport.width / 2);
+  const cy = Math.round(viewport.height / 2);
+
+  // 본문 한가운데로 커서를 옮긴다 — 이래야 wheel 이 섹션 iframe 으로 간다.
+  await page.mouse.move(cx, cy);
+
+  // (1) 아래로 굴리면 다음 페이지
+  const before = await lastCfi(page);
+  await page.mouse.wheel(0, 120);
+  await expect.poll(() => lastCfi(page), { timeout: 15_000 }).not.toBe(before);
+  const afterDown = (await lastCfi(page)) as string;
+
+  // 쿨다운(300ms)이 지나야 다음 입력이 먹는다.
+  await page.waitForTimeout(500);
+
+  // (2) 위로 굴리면 이전 페이지 — 되돌아와야 한다
+  await page.mouse.wheel(0, -120);
+  await expect
+    .poll(() => lastCfi(page), { timeout: 15_000 })
+    .not.toBe(afterDown);
+
+  // (3) 본문을 클릭해 포커스가 iframe 으로 들어간 뒤에도 휠이 동작해야 한다
+  await page.mouse.click(cx, cy);
+  await page.waitForTimeout(500);
+  const afterClick = await lastCfi(page);
+  await page.mouse.wheel(0, 120);
+  await expect
+    .poll(() => lastCfi(page), { timeout: 15_000 })
+    .not.toBe(afterClick);
+});
+
+// 자체 스크롤을 가진 앱 크롬(실앱의 목차 패널) 위에서는 휠이 페이지를 넘기지 말고
+// 그 요소를 스크롤해야 한다. 실제로 발생한 회귀 — 휠을 최상위 문서에 붙이면서
+// 커서 위치를 보지 않아 목차 패널 위에서도 페이지가 넘어갔다.
+test("앱 크롬 위에서는 휠이 페이지를 넘기지 않고 그 요소를 스크롤한다", async ({
+  page,
+}) => {
+  await page.goto("/check.html");
+  await page.evaluate(() => (window as any).check.openUrl("/fixtures/a.epub"));
+  await expect
+    .poll(() => page.evaluate(() => (window as any).check.openCount), {
+      timeout: 60_000,
+    })
+    .toBe(1);
+  await expect.poll(() => lastCfi(page), { timeout: 30_000 }).not.toBeNull();
+
+  const scrollTop = () =>
+    page.evaluate(
+      () => document.querySelector<HTMLElement>("#chrome")!.scrollTop,
+    );
+
+  await page.evaluate(() => {
+    document.querySelector<HTMLElement>("#chrome")!.hidden = false;
+  });
+
+  // 크롬 영역 안쪽(폭 220px)으로 커서를 옮긴다.
+  await page.mouse.move(110, 300);
+  const cfiBefore = await lastCfi(page);
+  const scrollBefore = await scrollTop();
+
+  await page.mouse.wheel(0, 300);
+  await expect
+    .poll(scrollTop, { timeout: 10_000 })
+    .toBeGreaterThan(scrollBefore);
+
+  expect(
+    await lastCfi(page),
+    "앱 크롬 위에서 굴렸는데 페이지가 넘어갔다",
+  ).toBe(cfiBefore);
+});

@@ -52,14 +52,66 @@ export function createReader(container: HTMLElement): Reader {
   let scale = 1;
 
   const keyHandlers: ((e: KeyboardEvent) => void)[] = [];
-  const dispatch = (e: Event) => {
+  const dispatchKey = (e: Event) => {
     for (const h of keyHandlers) h(e as KeyboardEvent);
   };
 
-  // 최상위 문서 + 섹션 iframe 문서 양쪽에 붙인다.
-  document.addEventListener("keydown", dispatch);
+  // 휠 한 번(마우스 노치) 또는 한 제스처(트랙패드 스와이프)에 한 페이지.
+  // 느낌이 안 맞으면 이 두 값만 조절하면 된다.
+  const WHEEL_THRESHOLD = 60; // 누적 |deltaY| 가 이만큼이면 한 페이지
+  const WHEEL_COOLDOWN_MS = 300; // 넘긴 뒤 이 시간 동안의 델타는 흡수(관성 방지)
+  let wheelAccum = 0;
+  let wheelLockUntil = 0;
+
+  /**
+   * @param fromBookContent 섹션 iframe 문서에서 온 이벤트인가.
+   *
+   * 최상위 문서에는 목차 패널처럼 **자체 스크롤을 가진 앱 크롬**이 함께 산다.
+   * 거기서 온 휠까지 가로채면 패널이 스크롤되지 않는다. 그래서 최상위에서 온
+   * 이벤트는 **리더 표면 안일 때만** 처리하고, 나머지는 네이티브 스크롤에 넘긴다.
+   * (reader.ts 는 `#toc` 같은 앱 크롬을 알지 못한다 — 알 필요도 없다.)
+   */
+  const makeWheelHandler = (fromBookContent: boolean) => (e: Event) => {
+    const ev = e as WheelEvent;
+
+    if (!fromBookContent && !container.contains(ev.target as Node)) return;
+
+    // 페이지네이션 모드는 컨테이너가 overflow:hidden 이라 스크롤할 것이 없다.
+    ev.preventDefault();
+
+    const now = performance.now();
+    if (now < wheelLockUntil) {
+      // 트랙패드 관성으로 이어지는 잔여 델타 — 한 제스처가 여러 장을 넘기지 않도록 버린다.
+      wheelAccum = 0;
+      return;
+    }
+
+    wheelAccum += ev.deltaY;
+    if (Math.abs(wheelAccum) < WHEEL_THRESHOLD) return;
+
+    const forward = wheelAccum > 0;
+    wheelAccum = 0;
+    wheelLockUntil = now + WHEEL_COOLDOWN_MS;
+    // 읽기 순서 기준으로 이동한다. goRight/goLeft 는 공간 기준(RTL 방향 래퍼)이라
+    // 아래로 굴렸을 때 RTL 책에서 반대로 간다.
+    void (forward ? view.next() : view.prev());
+  };
+
+  // 본문은 섹션마다 별도 iframe 이므로, 최상위 문서에만 붙이면 사용자가 본문에
+  // 커서를 올리거나 클릭한 뒤로는 이벤트가 도달하지 않는다.
+  // (키보드에서 이미 겪은 회귀 — 같은 경로로 휠도 함께 붙인다.)
+  const bindInput = (doc: Document, fromBookContent: boolean) => {
+    doc.addEventListener("keydown", dispatchKey);
+    // wheel 은 기본이 passive 라 preventDefault 가 무시된다 — 명시적으로 끈다.
+    doc.addEventListener("wheel", makeWheelHandler(fromBookContent), {
+      passive: false,
+    });
+  };
+
+  bindInput(document, false);
   view.addEventListener("load", (e: Event) => {
-    (e as CustomEvent).detail?.doc?.addEventListener("keydown", dispatch);
+    const doc = (e as CustomEvent).detail?.doc as Document | undefined;
+    if (doc) bindInput(doc, true);
   });
 
   // 페이지 넘김은 리더 자신의 키 동작이다.

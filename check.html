@@ -27,11 +27,30 @@
         position: fixed;
         top: -100px;
       }
+      /* 목차 패널 대역 — 자체 스크롤을 가진 앱 크롬. 휠이 여기서는
+         페이지를 넘기지 말고 이 요소를 스크롤해야 한다. 기본은 숨김. */
+      #chrome {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        z-index: 30;
+        width: 220px;
+        overflow-y: auto;
+        background: #eee;
+      }
+      #chrome[hidden] {
+        display: none;
+      }
+      #chrome-tall {
+        height: 3000px;
+      }
     </style>
   </head>
   <body>
     <input type="file" id="file" />
     <div id="reader"></div>
+    <div id="chrome" hidden><div id="chrome-tall"></div></div>
     <script type="module">
       import { createReader, flattenToc } from "/src/reader.ts";
 
