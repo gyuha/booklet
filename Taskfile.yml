@@ -1,0 +1,180 @@
+# booklet 실행·검증 환경의 단일 진입점.
+#
+# 설치: brew install go-task    사용: task --list
+#
+# package.json 의 dev/build 스크립트는 지우면 안 된다 —
+# tauri.conf.json 의 beforeDevCommand / beforeBuildCommand 가 직접 호출한다.
+# 여기 있는 task 들은 그 위를 덮는 사람·CI 용 진입점이다.
+version: "3"
+
+vars:
+  APP: src-tauri/target/release/bundle/macos/booklet.app
+  BIN: booklet.app/Contents/MacOS/booklet
+  CARGO: src-tauri/Cargo.toml
+
+tasks:
+  default:
+    desc: 사용 가능한 task 목록
+    cmds:
+      - task --list
+    silent: true
+
+  # ─────────────────────────── 환경 준비 ───────────────────────────
+
+  setup:
+    desc: 개발·검증 환경 준비 (node 의존성 · Playwright 브라우저 · clippy)
+    cmds:
+      - pnpm install
+      # 렌더 체크(C3)용. 이미 있으면 건너뛴다.
+      - pnpm exec playwright install chromium --only-shell
+      # 정적 검증(C2)용. rustup 은 멱등이다.
+      - rustup component add clippy
+
+  doctor:
+    desc: 필요한 도구가 다 있는지 확인 (아무것도 설치하지 않는다)
+    silent: true
+    cmds:
+      - |
+        ok=0
+        for c in pnpm node cargo rustc swift plutil; do
+          if command -v "$c" >/dev/null 2>&1; then
+            echo "✓ $c"
+          else
+            echo "✗ $c 없음"; ok=1
+          fi
+        done
+        if cargo clippy --version >/dev/null 2>&1; then echo "✓ clippy"; else echo "✗ clippy 없음 → task setup"; ok=1; fi
+        if [ -d "$HOME/Library/Caches/ms-playwright" ]; then echo "✓ playwright 브라우저 캐시"; else echo "✗ playwright 브라우저 없음 → task setup"; ok=1; fi
+        exit $ok
+
+  # ─────────────────────────── 개발 · 빌드 ───────────────────────────
+
+  dev:
+    desc: 개발 모드로 앱 실행 (HMR)
+    cmds:
+      - pnpm tauri dev
+
+  build:
+    desc: 릴리스 빌드 (.app 만 — DMG 는 로컬 전용이라 끔)
+    cmds:
+      - pnpm tauri build
+
+  run:
+    desc: 빌드된 .app 실행
+    preconditions:
+      - sh: test -d {{.APP}}
+        msg: "빌드 산출물이 없다. 먼저 `task build`."
+    cmds:
+      - open -n {{.APP}}
+
+  kill:
+    desc: 실행 중인 booklet 종료
+    cmds:
+      - cmd: pkill -f "{{.BIN}}"
+        ignore_error: true
+
+  clean:
+    desc: 빌드 산출물·테스트 결과 삭제 (Rust 캐시 포함)
+    cmds:
+      - rm -rf dist test-results playwright-report
+      - cargo clean --manifest-path {{.CARGO}}
+
+  # ──────────────── macOS LaunchServices 등록 ────────────────
+  # 기본 앱 자리는 건드리지 않는다. Info.plist 의 LSHandlerRank: Alternate 가
+  # 그것을 보장하고, C5 가 매번 검증한다.
+
+  register:
+    desc: 빌드된 .app 을 epub 뷰어로 LaunchServices 에 등록 ("다음으로 열기" 노출)
+    preconditions:
+      - sh: test -d {{.APP}}
+        msg: "빌드 산출물이 없다. 먼저 `task build`."
+    cmds:
+      - /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$PWD/{{.APP}}"
+      - task: handlers
+
+  unregister:
+    desc: LaunchServices 등록 해제 (cargo clean 전에 쓰면 죽은 항목이 안 남는다)
+    cmds:
+      - cmd: /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$PWD/{{.APP}}"
+        ignore_error: true
+
+  handlers:
+    desc: 현재 epub 핸들러 등록 상태 출력
+    cmds:
+      - swift scripts/checks/ls-probe.swift
+
+  install:
+    desc: /Applications 에 설치하고 등록 (기존 booklet.app 은 교체)
+    preconditions:
+      - sh: test -d {{.APP}}
+        msg: "빌드 산출물이 없다. 먼저 `task build`."
+    cmds:
+      - rm -rf "/Applications/booklet.app"
+      - cp -R {{.APP}} /Applications/
+      - /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/booklet.app
+      - task: handlers
+
+  # ─────────────── 스톱 조건 체크 (.forge/loop.md C1–C7) ───────────────
+
+  check:
+    desc: C1–C7 전부 실행. 하나 실패해도 계속 돌리고 마지막에 실패 목록을 낸다
+    silent: true
+    cmds:
+      - |
+        # 순서 주의: C1(빌드)이 C5·C7 의 산출물을 만든다.
+        failed=""
+        for c in c2 c6 c3 c4 c1 c5 c7; do
+          echo ""
+          echo "──────── $c ────────"
+          if task "check:$c"; then
+            echo "✓ $c"
+          else
+            echo "✗ $c"
+            failed="$failed $c"
+          fi
+        done
+        echo ""
+        echo "════════ 결과 ════════"
+        if [ -z "$failed" ]; then
+          echo "전부 통과 (C1–C7)"
+        else
+          echo "실패:$failed"
+          exit 1
+        fi
+
+  check:c1:
+    desc: "C1 빌드 — .app 이 생성되는가"
+    cmds:
+      - pnpm tauri build
+      - test -d {{.APP}}
+
+  check:c2:
+    desc: "C2 정적 검증 — tsc + clippy"
+    cmds:
+      - pnpm exec tsc --noEmit
+      - cargo clippy --manifest-path {{.CARGO}} --all-targets -- -D warnings
+
+  check:c3:
+    desc: "C3 렌더링 — Playwright 헤드리스에서 epub 이 실제로 그려지는가"
+    cmds:
+      - pnpm exec playwright test
+
+  check:c4:
+    desc: "C4 상태 영속성 — Rust 단위 테스트 3개 이상 (part 2/2 에서 채워짐)"
+    cmds:
+      - bash scripts/checks/state-tests.sh
+
+  check:c5:
+    desc: "C5 macOS 등록 무해성 — role=Viewer, 기본 핸들러 불변"
+    cmds:
+      - bash scripts/checks/macos-registration.sh
+
+  check:c6:
+    desc: "C6 벤더링 무결성 — foliate-js 가 upstream 커밋 고정인가"
+    cmds:
+      - bash scripts/checks/vendor-integrity.sh
+
+  check:c7:
+    desc: "C7 실행 생존 — .app 이 뜨고 5초를 버티는가"
+    cmds:
+      - bash scripts/checks/launch-survives.sh

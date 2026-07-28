@@ -1,0 +1,75 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  font-family:
+    -apple-system, "Apple SD Gothic Neo", BlinkMacSystemFont, sans-serif;
+  background: #fff;
+  color: #111;
+}
+
+#empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  height: 100%;
+  color: #666;
+}
+
+#empty[hidden] {
+  display: none;
+}
+
+.hint {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+#open-button {
+  padding: 0.5rem 1.25rem;
+  font-size: 0.95rem;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  background: #fafafa;
+  cursor: pointer;
+}
+
+#open-button:hover {
+  background: #f0f0f0;
+}
+
+/* 리더 위에 겹쳐 뜨는 배너. 책이 열린 상태에서도 보여야 한다. */
+.error {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  margin: 0;
+  padding: 0.6rem 1rem;
+  background: #b00020;
+  color: #fff;
+  font-size: 0.9rem;
+}
+
+.error[hidden] {
+  display: none;
+}
+
+#reader {
+  position: fixed;
+  inset: 0;
+}
+
+#reader[hidden] {
+  display: none;
+}
+
+foliate-view {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

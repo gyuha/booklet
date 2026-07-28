@@ -1,0 +1,24 @@
+{
+  "name": "booklet",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "check": "task check"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.7.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.0",
+    "@tauri-apps/cli": "^2",
+    "@types/node": "^26.1.1",
+    "typescript": "~5.6.2",
+    "vite": "^6.0.3"
+  }
+}

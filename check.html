@@ -1,0 +1,58 @@
+<!doctype html>
+<!--
+  Playwright 렌더 검증용 픽스처. Tauri 없이 브라우저에서 src/reader.ts 를 그대로 구동한다.
+  vite build 의 기본 input 은 index.html 하나뿐이라 이 파일은 배포 산출물에 들어가지 않는다.
+-->
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>booklet render check</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      #reader {
+        position: fixed;
+        inset: 0;
+      }
+      foliate-view {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      /* 파일 입력이 본문 클릭 검증을 방해하지 않도록 화면 밖으로 뺀다 */
+      #file {
+        position: fixed;
+        top: -100px;
+      }
+    </style>
+  </head>
+  <body>
+    <input type="file" id="file" />
+    <div id="reader"></div>
+    <script type="module">
+      import { createReader, flattenToc } from "/src/reader.ts";
+
+      const reader = createReader(document.querySelector("#reader"));
+      const locations = [];
+      reader.onRelocate((loc) => locations.push(loc));
+
+      window.check = {
+        reader,
+        locations,
+        opened: false,
+        // 두 번째 책 열기를 검증하려면 "몇 번째 오픈이 끝났는지" 가 필요하다
+        openCount: 0,
+        toc: () => flattenToc(reader.toc()).filter((i) => i.href),
+      };
+
+      document.querySelector("#file").addEventListener("change", async (e) => {
+        await reader.open(e.target.files[0]);
+        window.check.opened = true;
+        window.check.openCount += 1;
+      });
+    </script>
+  </body>
+</html>

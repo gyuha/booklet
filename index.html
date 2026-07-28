@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>booklet</title>
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+
+  <body>
+    <div id="empty">
+      <p class="hint">epub 파일을 창으로 끌어다 놓으세요</p>
+      <button id="open-button">파일 열기 (⌘O)</button>
+    </div>
+    <div id="reader" hidden></div>
+    <!-- #empty 밖에 둔다. 안에 있으면 책이 열린 뒤의 오류가 화면에 안 보인다. -->
+    <p class="error" id="error" hidden></p>
+  </body>
+</html>
