@@ -21,6 +21,10 @@ const serveEpubFixtures = (): Plugin => {
     "b.epub":
       process.env.BOOKLET_SAMPLE_EPUB2 ??
       `${homedir()}/Downloads/신 퇴마록 신세편 1.epub`,
+    // 이미지 폭 회귀 재현용 **합성** 픽스처. 사용자의 파일에 의존하지 않는다
+    // (처음에는 ~/Downloads 의 실제 책을 썼는데 그 파일이 사라져 체크가 깨졌다).
+    // scripts/checks/make-image-fixture.sh 가 만든다.
+    "c.epub": ".fixtures/image-overflow.epub",
   };
   return {
     name: "serve-epub-fixtures",

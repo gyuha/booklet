@@ -258,12 +258,12 @@ test("글꼴 배율이 본문에 실제로 반영된다", async ({ page }) => {
   await expect.poll(htmlFontSize, { timeout: 30_000 }).toBeGreaterThan(0);
   const base = await htmlFontSize();
 
-  await page.evaluate(() => (window as any).check.reader.setFontScale(1.6));
+  await page.evaluate(() => (window as any).check.setTypography({ fontScale: 1.6 }));
   await expect
     .poll(htmlFontSize, { timeout: 30_000 })
     .toBeGreaterThan(base * 1.3);
 
-  await page.evaluate(() => (window as any).check.reader.setFontScale(1));
+  await page.evaluate(() => (window as any).check.setTypography({ fontScale: 1 }));
   await expect
     .poll(htmlFontSize, { timeout: 30_000 })
     .toBeLessThan(base * 1.1);
@@ -353,4 +353,320 @@ test("앱 크롬 위에서는 휠이 페이지를 넘기지 않고 그 요소를
     await lastCfi(page),
     "앱 크롬 위에서 굴렸는데 페이지가 넘어갔다",
   ).toBe(cfiBefore);
+});
+
+// 타이포그래피 설정이 본문에 실제로 반영되는가 (part 3 S2/S5).
+// 여백은 CSS 가 아니라 paginator 속성이라 계산 스타일로 안 잡힌다 —
+// 여백이 늘면 컨테이너가 좁아져 **column-width 가 줄어드는** 것으로 관측한다.
+test("타이포그래피 설정이 본문에 반영된다", async ({ page }) => {
+  const bodyStyles = async () => {
+    const frames = page.frames().filter((f) => f !== page.mainFrame());
+    for (const f of frames) {
+      const v = await f
+        .evaluate(() => {
+          const p = document.querySelector("p");
+          if (!p || (document.body.textContent ?? "").length < 200) return null;
+          const s = getComputedStyle(p);
+          const root = getComputedStyle(document.documentElement);
+          return {
+            lineHeight: parseFloat(s.lineHeight) || 0,
+            letterSpacing: parseFloat(s.letterSpacing) || 0,
+            fontFamily: s.fontFamily,
+            columnWidth: parseFloat(root.columnWidth) || 0,
+          };
+        })
+        .catch(() => null);
+      if (v) return v;
+    }
+    return null;
+  };
+
+  await page.goto("/check.html");
+  await page.evaluate(() => (window as any).check.openUrl("/fixtures/a.epub"));
+  await expect
+    .poll(() => page.evaluate(() => (window as any).check.openCount), {
+      timeout: 60_000,
+    })
+    .toBe(1);
+
+  // 산문 섹션으로 이동해 <p> 가 있는 상태를 만든다.
+  const toc: { href: string }[] = await page.evaluate(() =>
+    (window as any).check.toc().map((i: any) => ({ href: i.href })),
+  );
+  for (const item of toc.slice(0, 10)) {
+    await goTo(page, item.href);
+    await page.waitForTimeout(400);
+    if (await bodyStyles()) break;
+  }
+  await expect.poll(bodyStyles, { timeout: 30_000 }).not.toBeNull();
+  const before = (await bodyStyles())!;
+
+  // 설치된 실제 글꼴 하나를 골라 함께 적용한다.
+  const fonts: { label: string; family: string | null }[] = await page.evaluate(
+    () => (window as any).check.availableFonts(),
+  );
+  const realFont = fonts.find((f) => f.family)?.family ?? null;
+
+  await page.evaluate(
+    (family) =>
+      (window as any).check.setTypography({
+        lineHeight: 2.4,
+        letterSpacing: 0.1,
+        margin: 160,
+        fontFamily: family,
+      }),
+    realFont,
+  );
+
+  await expect
+    .poll(async () => (await bodyStyles())?.lineHeight ?? 0, { timeout: 20_000 })
+    .toBeGreaterThan(before.lineHeight * 1.2);
+
+  const after = (await bodyStyles())!;
+  expect(after.letterSpacing, "자간이 반영되지 않았다").toBeGreaterThan(0.5);
+  expect(
+    after.columnWidth,
+    "여백을 늘렸는데 컬럼 폭이 줄지 않았다 (paginator margin 속성 미반영)",
+  ).toBeLessThan(before.columnWidth);
+  if (realFont) {
+    expect(after.fontFamily, "글꼴 지정이 반영되지 않았다").toContain(realFont);
+  }
+});
+
+// 설치되지 않은 글꼴은 목록에서 걸러져야 한다. 걸러지지 않으면 사용자가 고른 뒤
+// "아무 일도 안 일어나는" 설정을 만나게 된다.
+test("설치되지 않은 글꼴은 목록에서 걸러진다", async ({ page }) => {
+  await page.goto("/check.html");
+  await page.waitForFunction(() => (window as any).check?.availableFonts, null, {
+    timeout: 30_000,
+  });
+
+  const bogus = await page.evaluate(() =>
+    (window as any).check.isFontAvailable("NoSuchFont-XYZ-12345"),
+  );
+  expect(bogus, "존재하지 않는 글꼴을 사용 가능으로 판정했다").toBe(false);
+
+  const fonts: { label: string; family: string | null }[] = await page.evaluate(
+    () => (window as any).check.availableFonts(),
+  );
+  expect(fonts[0].family, "첫 항목은 항상 기본값 유지여야 한다").toBeNull();
+  expect(
+    fonts.some((f) => f.family === "NoSuchFont-XYZ-12345"),
+    "없는 글꼴이 목록에 들어갔다",
+  ).toBe(false);
+  // 감지기가 항상 false 를 돌려주는 것이 아님을 확인한다 (이 머신에는 한글 글꼴이 있다).
+  expect(
+    fonts.length,
+    "설치된 한글 글꼴을 하나도 감지하지 못했다 — 감지기가 죽었을 가능성",
+  ).toBeGreaterThanOrEqual(2);
+});
+
+// 이미지가 페이지(컬럼) 폭을 넘지 않는가. 실제로 발생한 회귀 —
+// foliate 의 setImageSize 는 책이 지정한 max-width 를 보존하므로
+// `<img style="max-width:1218px">` 같은 책에서 컬럼(743px)을 넘어 잘렸다.
+// c.epub 는 CSS 가 없고 이미지가 data URI 로 박힌, 그 조건을 가진 책이다.
+test("이미지가 페이지 폭을 넘지 않는다", async ({ page }) => {
+  /** 로드된 모든 프레임에서 (이미지 폭, 컬럼 폭) 최악 사례를 찾는다. */
+  const worstOverflow = async () => {
+    let worst: { img: number; col: number; ratio: number } | null = null;
+    for (const f of page.frames().filter((x) => x !== page.mainFrame())) {
+      const v = await f
+        .evaluate(() => {
+          const col = parseFloat(
+            getComputedStyle(document.documentElement).columnWidth,
+          );
+          if (!Number.isFinite(col) || col <= 0) return null;
+          let max = 0;
+          for (const el of document.querySelectorAll("img, svg, video")) {
+            max = Math.max(max, el.getBoundingClientRect().width);
+          }
+          return max > 0 ? { img: Math.round(max), col: Math.round(col) } : null;
+        })
+        .catch(() => null);
+      if (v) {
+        const ratio = v.img / v.col;
+        if (!worst || ratio > worst.ratio) worst = { ...v, ratio };
+      }
+    }
+    return worst;
+  };
+
+  await page.goto("/check.html");
+
+  // 픽스처가 실제로 zip 으로 서빙되는지 먼저 본다. 이게 없으면 개발 서버가
+  // 설정 변경 전 인스턴스일 때 foliate 의 "File type not supported" 라는
+  // 엉뚱한 메시지로 실패해 원인을 찾기 어렵다.
+  const magic = await page.evaluate(async () => {
+    const res = await fetch("/fixtures/c.epub");
+    const head = new Uint8Array(await (await res.blob()).slice(0, 2).arrayBuffer());
+    return String.fromCharCode(...head);
+  });
+  expect(
+    magic,
+    "/fixtures/c.epub 이 zip 으로 서빙되지 않았다 — 개발 서버를 재시작하라(vite.config.ts 의 픽스처 설정이 반영되지 않음)",
+  ).toBe("PK");
+
+  await page.evaluate(() => (window as any).check.openUrl("/fixtures/c.epub"));
+  await expect
+    .poll(() => page.evaluate(() => (window as any).check.openCount), {
+      timeout: 60_000,
+    })
+    .toBe(1);
+
+  const toc: string[] = await page.evaluate(() =>
+    (window as any).check.toc().map((i: any) => i.href),
+  );
+  // 합성 픽스처는 본문 1개 + 넓은 이미지 1개, 정확히 2항목이다.
+  expect(toc.length, "c.epub 목차가 비었다").toBeGreaterThanOrEqual(2);
+
+  // 이미지를 가진 섹션을 만날 때까지 순회하며 매번 검사한다.
+  let checked = 0;
+  for (const href of toc.slice(0, 25)) {
+    await goTo(page, href);
+    await page.waitForTimeout(500);
+    const worst = await worstOverflow();
+    if (!worst) continue;
+    checked += 1;
+    // 반올림·보더 오차를 감안해 2px 여유만 준다.
+    expect(
+      worst.img,
+      `이미지(${worst.img}px)가 페이지 폭(${worst.col}px)을 넘었다 — ${href}`,
+    ).toBeLessThanOrEqual(worst.col + 2);
+  }
+
+  expect(checked, "이미지를 가진 섹션을 하나도 만나지 못했다").toBeGreaterThan(0);
+});
+
+// 스페이스·↑·↓ 페이지 이동. ←/→ 는 공간 기준(goLeft/goRight)이지만
+// 이 셋은 읽기 순서 기준(next/prev)이다 — 휠과 같은 원칙.
+// 폼 컨트롤 가드도 함께 확인한다: 슬라이더에 포커스가 있으면 가로채면 안 된다
+// (가드가 없으면 방금 만든 설정 패널을 키보드로 조절할 수 없게 된다).
+test("스페이스·아래·위 키로 페이지를 이동하고 폼 컨트롤은 가로채지 않는다", async ({
+  page,
+}) => {
+  await page.goto("/check.html");
+  await page.evaluate(() => (window as any).check.openUrl("/fixtures/a.epub"));
+  await expect
+    .poll(() => page.evaluate(() => (window as any).check.openCount), {
+      timeout: 60_000,
+    })
+    .toBe(1);
+  await expect.poll(() => lastCfi(page), { timeout: 30_000 }).not.toBeNull();
+
+  // 본문을 클릭해 포커스를 섹션 iframe 으로 옮긴다 — 실제 사용 상태.
+  const viewport = page.viewportSize()!;
+  await page.mouse.click(
+    Math.round(viewport.width / 2),
+    Math.round(viewport.height / 2),
+  );
+  await page.waitForTimeout(400);
+
+  // 이 책은 섹션이 짧아 CFI 가 두 값 사이를 **왕복**한다. 따라서 "직전 값과 다른가"로는
+  // 판정할 수 없다. relocate 이력이 늘었는지(= 키가 실제로 이동을 일으켰는지)를 보고,
+  // ↑ 는 "변했다"가 아니라 **원래 자리로 돌아왔다**를 단언한다.
+  const relocateCount = () =>
+    page.evaluate(() => (window as any).check.locations.length);
+
+  const pressAndSettle = async (key: string) => {
+    const n = await relocateCount();
+    await page.keyboard.press(key);
+    await expect
+      .poll(relocateCount, { timeout: 15_000 })
+      .toBeGreaterThan(n);
+    await page.waitForTimeout(300); // 여러 relocate 가 이어질 때 마지막까지 기다린다
+    return (await lastCfi(page)) as string;
+  };
+
+  const start = (await lastCfi(page)) as string;
+
+  const afterDown = await pressAndSettle("ArrowDown");
+  expect(afterDown, "↓ 로 위치가 바뀌지 않았다").not.toBe(start);
+
+  const afterUp = await pressAndSettle("ArrowUp");
+  expect(afterUp, "↑ 로 원래 위치로 돌아오지 않았다").toBe(start);
+
+  const afterSpace = await pressAndSettle("Space");
+  expect(afterSpace, "스페이스로 위치가 바뀌지 않았다").not.toBe(start);
+
+  // 폼 컨트롤 가드: 슬라이더에 포커스를 주고 방향키·스페이스를 눌러도
+  // 페이지는 넘어가지 않고 슬라이더만 움직여야 한다.
+  await page.evaluate(() => {
+    document.querySelector<HTMLElement>("#chrome")!.hidden = false;
+  });
+  await page.focus("#chrome-range");
+  const rangeBefore = await page.inputValue("#chrome-range");
+  const cfiBefore = await lastCfi(page);
+
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Space");
+  await page.waitForTimeout(500);
+
+  expect(
+    await page.inputValue("#chrome-range"),
+    "슬라이더가 방향키에 반응하지 않았다 — 리더가 키를 가로챘다",
+  ).not.toBe(rangeBefore);
+  expect(
+    await lastCfi(page),
+    "슬라이더에 포커스가 있는데 페이지가 넘어갔다",
+  ).toBe(cfiBefore);
+});
+
+// Home/End 는 **책 전체**의 처음·끝으로, PageUp/PageDown 은 이전·다음 페이지로.
+// relocate 가 진행률(fraction)을 실어 오므로 "정말 책 끝으로 갔는지"를 단언할 수 있다 —
+// CFI 비교보다 훨씬 직접적인 판정이다.
+test("Home·End 로 책의 처음·끝으로, PageUp·PageDown 으로 페이지를 이동한다", async ({
+  page,
+}) => {
+  const lastFraction = () =>
+    page.evaluate(
+      () => (window as any).check.locations.at(-1)?.fraction ?? null,
+    );
+  const relocateCount = () =>
+    page.evaluate(() => (window as any).check.locations.length);
+
+  await page.goto("/check.html");
+  await page.evaluate(() => (window as any).check.openUrl("/fixtures/a.epub"));
+  await expect
+    .poll(() => page.evaluate(() => (window as any).check.openCount), {
+      timeout: 60_000,
+    })
+    .toBe(1);
+  await expect.poll(() => lastCfi(page), { timeout: 30_000 }).not.toBeNull();
+
+  // 본문을 클릭해 포커스를 섹션 iframe 으로 옮긴다 — 실제 사용 상태.
+  const viewport = page.viewportSize()!;
+  await page.mouse.click(
+    Math.round(viewport.width / 2),
+    Math.round(viewport.height / 2),
+  );
+  await page.waitForTimeout(400);
+
+  // End → 책의 끝 (진행률이 1 에 붙는다)
+  await page.keyboard.press("End");
+  await expect
+    .poll(lastFraction, { timeout: 20_000 })
+    .toBeGreaterThan(0.98);
+
+  // Home → 책의 처음
+  await page.keyboard.press("Home");
+  await expect.poll(lastFraction, { timeout: 20_000 }).toBeLessThan(0.02);
+
+  // PageDown → 다음, PageUp → 원래 자리로 (↑↓ 와 같은 왕복 판정)
+  const start = (await lastCfi(page)) as string;
+  let n = await relocateCount();
+  await page.keyboard.press("PageDown");
+  await expect.poll(relocateCount, { timeout: 15_000 }).toBeGreaterThan(n);
+  await page.waitForTimeout(300);
+  expect(await lastCfi(page), "PageDown 으로 위치가 바뀌지 않았다").not.toBe(
+    start,
+  );
+
+  n = await relocateCount();
+  await page.keyboard.press("PageUp");
+  await expect.poll(relocateCount, { timeout: 15_000 }).toBeGreaterThan(n);
+  await page.waitForTimeout(300);
+  expect(
+    await lastCfi(page),
+    "PageUp 으로 원래 위치로 돌아오지 않았다",
+  ).toBe(start);
 });

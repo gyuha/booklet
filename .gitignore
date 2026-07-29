@@ -32,3 +32,9 @@ dist-ssr
 # Playwright
 test-results
 playwright-report
+
+# 배포용 zip 산출물
+dist-release
+
+# 생성되는 검증 픽스처
+.fixtures

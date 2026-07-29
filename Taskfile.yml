@@ -114,6 +114,13 @@ tasks:
       - /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/booklet.app
       - task: handlers
 
+  # ─────────────────────────── 배포 ───────────────────────────
+
+  deploy:
+    desc: 버전을 올리고 GitHub 릴리스로 배포 (기본 patch · `task deploy -- minor`)
+    cmds:
+      - bash scripts/deploy.sh {{.CLI_ARGS}}
+
   # ─────────────── 스톱 조건 체크 (.forge/loop.md C1–C9) ───────────────
 
   check:
@@ -157,6 +164,8 @@ tasks:
   check:c3:
     desc: "C3 렌더링 — Playwright 헤드리스에서 epub 이 실제로 그려지는가"
     cmds:
+      # 이미지 폭 체크용 합성 픽스처를 먼저 준비한다 (멱등).
+      - bash scripts/checks/make-image-fixture.sh
       - pnpm exec playwright test
 
   check:c4:

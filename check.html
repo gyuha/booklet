@@ -50,13 +50,25 @@
   <body>
     <input type="file" id="file" />
     <div id="reader"></div>
-    <div id="chrome" hidden><div id="chrome-tall"></div></div>
+    <div id="chrome" hidden>
+      <!-- 설정 패널의 슬라이더 대역. 여기 포커스가 있을 때 방향키·스페이스가
+           페이지를 넘기지 않아야 한다(폼 컨트롤 가드). -->
+      <input id="chrome-range" type="range" min="0" max="100" step="1" value="50" />
+      <div id="chrome-tall"></div>
+    </div>
     <script type="module">
-      import { createReader, flattenToc } from "/src/reader.ts";
+      import {
+        createReader,
+        flattenToc,
+        DEFAULT_TYPOGRAPHY,
+      } from "/src/reader.ts";
+      import { availableFonts, isFontAvailable } from "/src/fonts.ts";
 
       const reader = createReader(document.querySelector("#reader"));
       const locations = [];
       reader.onRelocate((loc) => locations.push(loc));
+
+      const typo = { ...DEFAULT_TYPOGRAPHY };
 
       window.check = {
         reader,
@@ -65,6 +77,13 @@
         // 두 번째 책 열기를 검증하려면 "몇 번째 오픈이 끝났는지" 가 필요하다
         openCount: 0,
         toc: () => flattenToc(reader.toc()).filter((i) => i.href),
+        // 타이포그래피는 일부만 바꿔 적용할 수 있게 한다 (체크 작성 편의)
+        setTypography: (patch) => {
+          Object.assign(typo, patch);
+          reader.setTypography(typo);
+        },
+        availableFonts,
+        isFontAvailable,
       };
 
       const opened = async (blob, lastLocation) => {

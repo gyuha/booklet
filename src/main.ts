@@ -4,12 +4,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { createReader, flattenToc } from "./reader";
+import { createReader, flattenToc, type Typography } from "./reader";
+import { availableFonts } from "./fonts";
 
+/** state.json 과 1:1. 타이포그래피는 전역이라 positions 처럼 책별로 갖지 않는다. */
 type AppState = {
   lastBook: string | null;
   positions: Record<string, string>;
   fontScale: number;
+  fontFamily: string | null;
+  lineHeight: number;
+  letterSpacing: number;
+  margin: number;
 };
 
 const MIN_SCALE = 0.6;
@@ -19,19 +25,32 @@ const emptyEl = document.querySelector<HTMLElement>("#empty")!;
 const readerEl = document.querySelector<HTMLElement>("#reader")!;
 const errorEl = document.querySelector<HTMLElement>("#error")!;
 const openButton = document.querySelector<HTMLButtonElement>("#open-button")!;
-const tocToggle = document.querySelector<HTMLButtonElement>("#toc-toggle")!;
-const tocPanel = document.querySelector<HTMLElement>("#toc")!;
+const panelToggle = document.querySelector<HTMLButtonElement>("#panel-toggle")!;
+const panelEl = document.querySelector<HTMLElement>("#panel")!;
+const tocBody = document.querySelector<HTMLElement>("#toc")!;
+const settingsBody = document.querySelector<HTMLElement>("#settings")!;
+const tabButtons = Array.from(
+  document.querySelectorAll<HTMLButtonElement>(".panel-tab"),
+);
 
 // 리더를 처음부터 만들어 둔다. 그래야 키 핸들러 등록 경로가 하나로 유지된다 —
 // reader 가 document 와 모든 섹션 iframe 에 핸들러를 붙이므로, main 은 window 에
 // 따로 붙이지 않는다. 따로 붙이면 최상위 포커스에서 ⌘O 가 두 번 발동한다.
 const reader = createReader(readerEl);
 
-let state: AppState = { lastBook: null, positions: {}, fontScale: 1 };
+let state: AppState = {
+  lastBook: null,
+  positions: {},
+  fontScale: 1,
+  fontFamily: null,
+  lineHeight: 1.7,
+  letterSpacing: 0,
+  margin: 48,
+};
 let currentPath: string | null = null;
 let bookLoaded = false;
 
-// relocate 는 페이지를 넘길 때마다 발생하므로 저장을 모아서 한 번만 한다.
+// relocate 는 페이지를 넘길 때마다, 슬라이더는 끌 때마다 발생하므로 저장을 모은다.
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleSave() {
   clearTimeout(saveTimer);
@@ -47,10 +66,60 @@ function showError(message: string) {
   errorEl.hidden = false;
 }
 
-// ─────────────────────────── 목차 패널 ───────────────────────────
+// ─────────────────────────── 타이포그래피 ───────────────────────────
+
+const typography = (): Typography => ({
+  fontFamily: state.fontFamily,
+  fontScale: state.fontScale,
+  lineHeight: state.lineHeight,
+  letterSpacing: state.letterSpacing,
+  margin: state.margin,
+});
+
+function applyTypography() {
+  reader.setTypography(typography());
+}
+
+// ─────────────────────────── 패널 (목차 / 설정) ───────────────────────────
+
+type Tab = "toc" | "settings";
+let activeTab: Tab = "toc";
+
+/**
+ * 패널 표시를 한 곳에서만 바꾼다. 햄버거 버튼은 기본적으로 hover 에서만 보이는데,
+ * **패널이 열려 있는 동안에는 계속 보여야** 한다(닫을 방법이 눈에 있어야 하므로).
+ * 그 상태를 CSS 로 알려면 클래스가 필요하다 — 버튼이 DOM 에서 패널보다 앞에 있어
+ * 형제 선택자로는 잡을 수 없고, :has() 는 엔진 지원에 의존하게 된다.
+ */
+function setPanelVisible(visible: boolean) {
+  panelEl.hidden = !visible;
+  panelToggle.classList.toggle("pinned", visible);
+}
+
+function activateTab(tab: Tab) {
+  activeTab = tab;
+  tocBody.hidden = tab !== "toc";
+  settingsBody.hidden = tab !== "settings";
+  for (const b of tabButtons) {
+    b.setAttribute("aria-selected", String(b.dataset.tab === tab));
+  }
+}
+
+/** 같은 탭을 다시 부르면 닫고, 다른 탭이면 그 탭으로 전환한다. */
+function togglePanel(tab: Tab) {
+  if (!bookLoaded) return;
+  if (panelEl.hidden) {
+    activateTab(tab);
+    setPanelVisible(true);
+  } else if (activeTab === tab) {
+    setPanelVisible(false);
+  } else {
+    activateTab(tab);
+  }
+}
 
 function renderToc() {
-  tocPanel.replaceChildren();
+  tocBody.replaceChildren();
   const items = flattenToc(reader.toc()).filter((i) => i.href);
   for (const item of items) {
     const entry = document.createElement("button");
@@ -59,16 +128,97 @@ function renderToc() {
     entry.textContent = item.label?.trim() || "(제목 없음)";
     entry.addEventListener("click", () => {
       void reader.goTo(item.href as string);
-      tocPanel.hidden = true;
+      setPanelVisible(false);
     });
-    tocPanel.append(entry);
+    tocBody.append(entry);
   }
 }
 
-function toggleToc() {
-  if (!bookLoaded) return;
-  tocPanel.hidden = !tocPanel.hidden;
+// ─────────────────────────── 설정 컨트롤 ───────────────────────────
+
+const fontSelect = document.querySelector<HTMLSelectElement>("#set-font")!;
+
+type Slider = {
+  input: HTMLInputElement;
+  output: HTMLOutputElement;
+  format: (v: number) => string;
+  read: () => number;
+  write: (v: number) => void;
+};
+
+const sliders: Slider[] = [
+  {
+    input: document.querySelector<HTMLInputElement>("#set-scale")!,
+    output: document.querySelector<HTMLOutputElement>("#out-scale")!,
+    format: (v) => `${Math.round(v * 100)}%`,
+    read: () => state.fontScale,
+    write: (v) => (state.fontScale = v),
+  },
+  {
+    input: document.querySelector<HTMLInputElement>("#set-line")!,
+    output: document.querySelector<HTMLOutputElement>("#out-line")!,
+    format: (v) => v.toFixed(2),
+    read: () => state.lineHeight,
+    write: (v) => (state.lineHeight = v),
+  },
+  {
+    input: document.querySelector<HTMLInputElement>("#set-letter")!,
+    output: document.querySelector<HTMLOutputElement>("#out-letter")!,
+    format: (v) => `${v.toFixed(2)}em`,
+    read: () => state.letterSpacing,
+    write: (v) => (state.letterSpacing = v),
+  },
+  {
+    input: document.querySelector<HTMLInputElement>("#set-margin")!,
+    output: document.querySelector<HTMLOutputElement>("#out-margin")!,
+    format: (v) => `${Math.round(v)}px`,
+    read: () => state.margin,
+    write: (v) => (state.margin = v),
+  },
+];
+
+/** 상태 → UI. ⌘+/⌘- 로 값이 바뀔 때도 불러 슬라이더를 맞춘다. */
+function syncControls() {
+  for (const s of sliders) {
+    const v = s.read();
+    s.input.value = String(v);
+    s.output.textContent = s.format(v);
+  }
+  fontSelect.value = state.fontFamily ?? "";
 }
+
+function buildFontSelect() {
+  const options = availableFonts();
+  fontSelect.replaceChildren();
+  for (const o of options) {
+    const el = document.createElement("option");
+    el.value = o.family ?? "";
+    el.textContent = o.label;
+    fontSelect.append(el);
+  }
+
+  // 다른 머신에서 저장된 글꼴이 여기 없을 수 있다. 그대로 두면 CSS 가 폴백되어
+  // "설정했는데 아무 일도 안 일어난다"로 보이므로 기본값으로 되돌린다.
+  if (state.fontFamily && !options.some((o) => o.family === state.fontFamily)) {
+    state.fontFamily = null;
+    scheduleSave();
+  }
+}
+
+for (const s of sliders) {
+  s.input.addEventListener("input", () => {
+    s.write(parseFloat(s.input.value));
+    s.output.textContent = s.format(s.read());
+    applyTypography();
+    scheduleSave();
+  });
+}
+
+fontSelect.addEventListener("change", () => {
+  state.fontFamily = fontSelect.value || null;
+  applyTypography();
+  scheduleSave();
+});
 
 // ─────────────────────────── 책 열기 ───────────────────────────
 
@@ -106,16 +256,16 @@ async function openPath(rawPath: string): Promise<boolean> {
 
     document.title = name.replace(/\.epub$/i, "");
     renderToc();
-    tocToggle.hidden = false;
-    tocPanel.hidden = true;
+    panelToggle.hidden = false;
+    setPanelVisible(false);
     return true;
   } catch (e) {
     currentPath = wasLoaded ? previousPath : null;
-    tocPanel.hidden = true;
+    setPanelVisible(false);
     if (!wasLoaded) {
       readerEl.hidden = true;
       emptyEl.hidden = false;
-      tocToggle.hidden = true;
+      panelToggle.hidden = true;
     }
     showError(`열지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
     return false;
@@ -131,23 +281,25 @@ async function pickAndOpen() {
   if (typeof path === "string") await openPath(path);
 }
 
-// ─────────────────────────── 글꼴 크기 ───────────────────────────
+// ─────────────────────────── 입력 배선 ───────────────────────────
 
 function setScale(next: number) {
   const clamped = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
   state.fontScale = Math.round(clamped * 100) / 100;
-  reader.setFontScale(state.fontScale);
+  applyTypography();
+  syncControls();
   scheduleSave();
 }
 
-// ─────────────────────────── 입력 배선 ───────────────────────────
-
 openButton.addEventListener("click", () => void pickAndOpen());
-tocToggle.addEventListener("click", () => toggleToc());
+panelToggle.addEventListener("click", () => togglePanel(activeTab));
+for (const b of tabButtons) {
+  b.addEventListener("click", () => activateTab(b.dataset.tab as Tab));
+}
 
 reader.onKeydown((e) => {
-  if (e.key === "Escape" && !tocPanel.hidden) {
-    tocPanel.hidden = true;
+  if (e.key === "Escape" && !panelEl.hidden) {
+    setPanelVisible(false);
     return;
   }
   if (!e.metaKey) return;
@@ -158,7 +310,11 @@ reader.onKeydown((e) => {
       break;
     case "t":
       e.preventDefault();
-      toggleToc();
+      togglePanel("toc");
+      break;
+    case ",":
+      e.preventDefault();
+      togglePanel("settings");
       break;
     // ⌘+ 는 레이아웃에 따라 "+" 또는 "=" 로 들어온다.
     case "+":
@@ -202,7 +358,11 @@ async function boot() {
     console.error("상태 로드 실패", e);
     return state;
   });
-  reader.setFontScale(state.fontScale);
+
+  buildFontSelect();
+  syncControls();
+  activateTab("toc");
+  applyTypography();
 
   const pending = await invoke<string | null>("take_pending_book");
   if (pending) {

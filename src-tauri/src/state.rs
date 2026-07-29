@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// 타이포그래피 값은 **전역**이다 — 책의 속성이 아니라 읽는 사람의 속성이므로
+/// positions 처럼 책별로 갖지 않는다 (CONTEXT.md 의 "타이포그래피 설정" 참조).
+///
+/// 중첩 객체로 묶지 않고 평평하게 둔 것은 의도적이다: serde 의 `default` 가 빈 필드를
+/// 채우므로 이 필드들이 없는 옛 state.json 도 마이그레이션 없이 그대로 읽힌다.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppState {
@@ -16,6 +21,14 @@ pub struct AppState {
     pub positions: HashMap<String, String>,
     /// 본문 글꼴 배율. 1.0 = 기본.
     pub font_scale: f64,
+    /// 본문 글꼴 이름. None = epub 자체 지정을 존중(아무것도 주입하지 않음).
+    pub font_family: Option<String>,
+    /// 줄간격. 1.7 = 이 값이 설정으로 승격되기 전까지 하드코딩되어 있던 값.
+    pub line_height: f64,
+    /// 자간(em). 0 = 기본. 한글은 음수 쪽이 위험해 UI 에서 좁게 제한한다.
+    pub letter_spacing: f64,
+    /// 본문 양쪽 여백(px). 48 = foliate paginator 기본값.
+    pub margin: f64,
 }
 
 impl Default for AppState {
@@ -24,6 +37,10 @@ impl Default for AppState {
             last_book: None,
             positions: HashMap::new(),
             font_scale: 1.0,
+            font_family: None,
+            line_height: 1.7,
+            letter_spacing: 0.0,
+            margin: 48.0,
         }
     }
 }
@@ -64,10 +81,36 @@ mod tests {
             last_book: Some("/books/a.epub".to_string()),
             positions,
             font_scale: 1.25,
+            font_family: Some("Pretendard".to_string()),
+            line_height: 2.05,
+            letter_spacing: 0.03,
+            margin: 96.0,
         };
 
         save(&path, &original).expect("save 실패");
         assert_eq!(load(&path), original);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 타이포그래피 필드가 없는 옛 state.json 이 마이그레이션 없이 읽히는가.
+    /// 평평한 구조 + serde default 를 택한 이유가 바로 이것이다.
+    #[test]
+    fn state_without_typography_fields_gets_defaults() {
+        let path = tmp("legacy");
+        std::fs::write(
+            &path,
+            r#"{"lastBook":"/books/old.epub","positions":{},"fontScale":1.4}"#,
+        )
+        .expect("write 실패");
+
+        let loaded = load(&path);
+        assert_eq!(loaded.last_book.as_deref(), Some("/books/old.epub"));
+        assert_eq!(loaded.font_scale, 1.4, "기존 값은 보존되어야 한다");
+        assert_eq!(loaded.font_family, None);
+        assert_eq!(loaded.line_height, 1.7, "빠진 필드는 기본값");
+        assert_eq!(loaded.letter_spacing, 0.0);
+        assert_eq!(loaded.margin, 48.0);
 
         let _ = std::fs::remove_file(&path);
     }

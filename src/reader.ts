@@ -13,17 +13,47 @@ export type Location = {
   fraction?: number;
 };
 
-// 본문에 주입할 최소 스타일. epub 자체 CSS를 덮어쓰지 않도록 최소한만 건드린다.
+/** 전역 타이포그래피 설정. 책의 속성이 아니라 읽는 사람의 속성이다. */
+export type Typography = {
+  /** null = epub 자체 지정을 존중(아무것도 주입하지 않음) */
+  fontFamily: string | null;
+  fontScale: number;
+  lineHeight: number;
+  /** em 단위 */
+  letterSpacing: number;
+  /** px 단위, 본문 양쪽 여백 */
+  margin: number;
+};
+
+export const DEFAULT_TYPOGRAPHY: Typography = {
+  fontFamily: null,
+  fontScale: 1,
+  lineHeight: 1.7,
+  letterSpacing: 0,
+  margin: 48,
+};
+
+// 글꼴을 강제하려면 epub 자체 CSS 를 이겨야 하므로 !important 가 필요하다.
+// pre/code 는 목록에서 빼 등폭 글꼴을 지킨다(그 안의 div/span 까지는 못 막는다 — 감수).
+const FONT_TARGETS =
+  "html, body, p, li, blockquote, dd, dt, div, span, h1, h2, h3, h4, h5, h6, td, th, figcaption";
+
+// 본문에 주입할 스타일. epub 자체 CSS를 덮어쓰지 않도록 최소한만 건드린다.
 // html 의 font-size 를 배율로 잡으면 em/% 기반인 epub 본문이 함께 따라온다.
-const bookCss = (scale: number) => `
-  html { font-size: ${Math.round(scale * 100)}%; }
+const bookCss = (t: Typography) => {
+  const family = t.fontFamily?.replace(/["\\]/g, "");
+  return `
+  html { font-size: ${Math.round(t.fontScale * 100)}%; }
+  ${family ? `${FONT_TARGETS} { font-family: "${family}" !important; }` : ""}
   p, li, blockquote, dd {
-    line-height: 1.7;
+    line-height: ${t.lineHeight};
+    letter-spacing: ${t.letterSpacing}em;
     hanging-punctuation: allow-end last;
     widows: 2;
   }
   pre { white-space: pre-wrap !important; }
 `;
+};
 
 export type Reader = {
   /** lastLocation 에 CFI 를 주면 그 지점에서 시작한다. 없으면 첫 페이지. */
@@ -32,7 +62,8 @@ export type Reader = {
   goRight(): void;
   goTo(href: string): Promise<void>;
   toc(): TocItem[];
-  setFontScale(scale: number): void;
+  /** 다섯 값을 한 번에 적용한다. 주입 CSS + paginator 속성 양쪽을 갱신한다. */
+  setTypography(t: Typography): void;
   onRelocate(cb: (loc: Location) => void): void;
   /**
    * 키 핸들러를 등록한다.
@@ -49,7 +80,82 @@ export function createReader(container: HTMLElement): Reader {
   const view = document.createElement("foliate-view") as any;
   container.append(view);
 
-  let scale = 1;
+  let typo: Typography = { ...DEFAULT_TYPOGRAPHY };
+
+  /**
+   * 여백은 CSS 주입이 아니라 paginator 속성으로 제어한다 — foliate 가
+   * `observedAttributes` 로 이미 지원하며, 값은 CSS 커스텀 프로퍼티로 그대로 들어간다.
+   *
+   * **`margin` 속성만으로는 여백이 조절되지 않는다 (실측 확인).** paginator 의 그리드는
+   * `minmax(margin,1fr) │ min(100%, max-width) │ minmax(margin,1fr)` 이라, 폭 상한을
+   * 크게 두면 본문 트랙이 컨테이너 100% 를 요구해 좌우 트랙이 0 으로 붕괴한다.
+   * 측정: margin 48→160 은 column-width 1100 불변, max-inline-size 100000→400 은 1100→369.
+   *
+   * 그래서 **폭 상한을 컨테이너 폭에서 역산**한다: `상한 = 폭 − 2×여백`.
+   * 남는 공간이 정확히 좌우 여백이 되어 여백 슬라이더가 어떤 창 크기에서도 실효 제어가 된다.
+   * `max-column-count: 1` 로 1단을 고정한다 — 2단을 쓰려면 상한이 폭의 절반이어야 해서
+   * 여백 제어와 양립하지 않는다(기본 800px 창에서는 이미 1단이라 체감 변화 없음).
+   *
+   * 루프는 생기지 않는다: 상한 변경은 `render()` 를 부르지만 컨테이너 크기를 바꾸지
+   * 않으므로 아래 ResizeObserver 를 다시 깨우지 않는다. 같은 값 재설정도 막아 둔다.
+   */
+  const applyLayout = () => {
+    const r = view.renderer;
+    if (!r) return;
+    r.setAttribute("max-column-count", "1");
+    // 여백의 최소값으로도 함께 넣어 둔다(폭이 아래 하한에 걸릴 때를 위해).
+    r.setAttribute("margin", `${typo.margin}px`);
+
+    const width = container.clientWidth;
+    if (width <= 0) return; // 아직 레이아웃 전
+    const inline = Math.max(120, width - typo.margin * 2);
+    const next = `${Math.round(inline)}px`;
+    if (r.getAttribute("max-inline-size") !== next) {
+      r.setAttribute("max-inline-size", next);
+    }
+  };
+
+  /**
+   * 이미지를 **현재 페이지(컬럼) 폭**으로 제한한다.
+   *
+   * foliate 의 `setImageSize()` 는 "이미 max-width 가 설정돼 있으면 보존"한다.
+   * 그래서 책이 `<img style="max-width:1218px">` 처럼 직접 지정하면 컬럼(743px)을
+   * 넘어 잘린다 — 실측으로 확인한 회귀다.
+   *
+   * `max-width: 100%` 로 덮는 것으로는 부족하다: 여러 페이지짜리 섹션에서는
+   * body 가 컬럼 스트립 전체로 늘어나(측정값 3156·7176px) 100% 가 컬럼 폭이 아니게 된다.
+   * 그래서 그 문서의 `column-width` 를 읽어 **px 로** 박는다.
+   *
+   * foliate 는 인라인 !important 로 쓰므로 우리도 인라인 !important 로 쓴다. 이후 렌더에서
+   * foliate 가 다시 읽을 때는 우리 값이 "이미 설정된 max-width" 가 되어 그대로 보존된다.
+   */
+  const clampImages = () => {
+    const contents = view.renderer?.getContents?.() ?? [];
+    for (const { doc } of contents) {
+      if (!doc?.documentElement || !doc.body) continue;
+      const colWidth = parseFloat(
+        getComputedStyle(doc.documentElement).columnWidth,
+      );
+      if (!Number.isFinite(colWidth) || colWidth <= 0) continue;
+      const cap = `${Math.floor(colWidth)}px`;
+      for (const el of doc.body.querySelectorAll("img, svg, video")) {
+        (el as HTMLElement).style.setProperty("max-width", cap, "important");
+      }
+    }
+  };
+
+  // foliate 의 setImageSize 는 render 시점에 돌므로 그 뒤에 덮어써야 한다.
+  const clampImagesSoon = () => requestAnimationFrame(() => clampImages());
+
+  // 창 크기가 바뀌면 역산 값도 다시 맞춰야 한다.
+  new ResizeObserver(() => {
+    applyLayout();
+    clampImagesSoon();
+  }).observe(container);
+
+  // 섹션이 새로 로드될 때마다 (그리고 페이지 이동으로 재렌더될 때마다) 다시 제한한다.
+  view.addEventListener("load", clampImagesSoon);
+  view.addEventListener("relocate", clampImagesSoon);
 
   const keyHandlers: ((e: KeyboardEvent) => void)[] = [];
   const dispatchKey = (e: Event) => {
@@ -114,15 +220,75 @@ export function createReader(container: HTMLElement): Reader {
     if (doc) bindInput(doc, true);
   });
 
+  /**
+   * 슬라이더·셀렉트에 포커스가 있을 때는 페이지 넘김 키를 가로채지 않는다.
+   * ←/→/↑/↓/스페이스는 모두 폼 컨트롤의 조작 키이기도 해서, 가드가 없으면
+   * 설정 패널의 슬라이더를 키보드로 조절할 수 없게 된다.
+   */
+  const isFormControl = (target: EventTarget | null) => {
+    const el = target as HTMLElement | null;
+    if (!el || typeof el.tagName !== "string") return false;
+    return (
+      /^(INPUT|SELECT|TEXTAREA|BUTTON|OPTION)$/.test(el.tagName) ||
+      el.isContentEditable === true
+    );
+  };
+
+  /**
+   * 책의 처음(0)/끝(1)으로 이동한다. 진행률 기준이라 섹션 경계와 무관하다 —
+   * foliate 의 `getSection()` 은 `≤0` 을 [첫 섹션, 0], `≥1` 을 [마지막 섹션, 1] 로 준다.
+   *
+   * `goToFraction` 은 내부 `#sectionProgress` 에 null 가드가 없어서, 그게 없는 책
+   * (EPUB 이 아닌 포맷 등)에서는 던진다. 그때는 섹션 인덱스로 대체한다.
+   */
+  const goToBookEdge = async (fraction: 0 | 1) => {
+    try {
+      await view.goToFraction(fraction);
+    } catch {
+      const last = (view.book?.sections?.length ?? 1) - 1;
+      await view.goTo(fraction === 0 ? 0 : Math.max(0, last));
+    }
+  };
+
   // 페이지 넘김은 리더 자신의 키 동작이다.
   keyHandlers.push((e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.key === "ArrowLeft") {
-      e.preventDefault();
-      view.goLeft();
-    } else if (e.key === "ArrowRight") {
-      e.preventDefault();
-      view.goRight();
+    if (isFormControl(e.target)) return;
+
+    switch (e.key) {
+      // ←/→ 는 **공간** 기준이다 (goLeft/goRight 가 RTL 방향 래퍼).
+      case "ArrowLeft":
+        e.preventDefault();
+        view.goLeft();
+        break;
+      case "ArrowRight":
+        e.preventDefault();
+        view.goRight();
+        break;
+      // ↑/↓/스페이스는 **읽기 순서** 기준이다 — 아래로 가면 RTL 책에서도 다음 내용.
+      // 휠과 같은 원칙(next/prev).
+      case "ArrowDown":
+      case " ":
+      case "PageDown":
+        e.preventDefault();
+        void view.next();
+        break;
+      case "ArrowUp":
+      case "PageUp":
+        e.preventDefault();
+        void view.prev();
+        break;
+      // 책 전체의 처음/끝. 섹션 처음/끝이 아니다.
+      // 책 전체의 처음/끝. 섹션 처음/끝이 아니다.
+      case "Home":
+        e.preventDefault();
+        void goToBookEdge(0);
+        break;
+      case "End":
+        e.preventDefault();
+        void goToBookEdge(1);
+        break;
+
     }
   });
 
@@ -133,7 +299,8 @@ export function createReader(container: HTMLElement): Reader {
       // (close() 는 renderer?.destroy() 라 아무것도 안 열린 상태에서도 안전하다.)
       view.close();
       await view.open(file);
-      view.renderer.setStyles?.(bookCss(scale));
+      view.renderer.setStyles?.(bookCss(typo));
+      applyLayout();
       // init() 은 lastLocation 이 있으면 그 지점으로, 없으면 첫 페이지로 이동하며
       // 렌더가 끝난 뒤 resolve 한다. 예전의 renderer.next() 를 대체한다.
       await view.init({ lastLocation: lastLocation ?? undefined });
@@ -142,9 +309,11 @@ export function createReader(container: HTMLElement): Reader {
     goRight: () => view.goRight(),
     goTo: (href: string) => view.goTo(href),
     toc: () => view.book?.toc ?? [],
-    setFontScale(next: number) {
-      scale = next;
-      view.renderer?.setStyles?.(bookCss(scale));
+    setTypography(next: Typography) {
+      typo = next;
+      view.renderer?.setStyles?.(bookCss(typo));
+      applyLayout();
+      clampImagesSoon(); // 여백이 바뀌면 컬럼 폭도 바뀐다
     },
     onRelocate(cb) {
       view.addEventListener("relocate", (e: CustomEvent) =>

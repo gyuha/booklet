@@ -15,8 +15,45 @@
     </div>
     <div id="reader" hidden></div>
 
-    <button id="toc-toggle" type="button" title="목차 (⌘T)" hidden>☰</button>
-    <nav id="toc" hidden></nav>
+    <button id="panel-toggle" type="button" title="목차 ⌘T · 설정 ⌘," hidden>
+      ☰
+    </button>
+
+    <aside id="panel" hidden>
+      <div id="panel-tabs">
+        <button class="panel-tab" type="button" data-tab="toc">목차</button>
+        <button class="panel-tab" type="button" data-tab="settings">설정</button>
+      </div>
+
+      <nav id="toc" class="panel-body"></nav>
+
+      <div id="settings" class="panel-body" hidden>
+        <label class="field">
+          <span class="field-name">글꼴</span>
+          <select id="set-font"></select>
+        </label>
+
+        <label class="field">
+          <span class="field-name">글자 크기 <output id="out-scale"></output></span>
+          <input id="set-scale" type="range" min="0.6" max="2.5" step="0.1" />
+        </label>
+
+        <label class="field">
+          <span class="field-name">줄간격 <output id="out-line"></output></span>
+          <input id="set-line" type="range" min="1.2" max="2.4" step="0.05" />
+        </label>
+
+        <label class="field">
+          <span class="field-name">자간 <output id="out-letter"></output></span>
+          <input id="set-letter" type="range" min="-0.02" max="0.1" step="0.01" />
+        </label>
+
+        <label class="field">
+          <span class="field-name">여백 <output id="out-margin"></output></span>
+          <input id="set-margin" type="range" min="0" max="160" step="8" />
+        </label>
+      </div>
+    </aside>
 
     <!-- #empty 밖에 둔다. 안에 있으면 책이 열린 뒤의 오류가 화면에 안 보인다. -->
     <p class="error" id="error" hidden></p>
