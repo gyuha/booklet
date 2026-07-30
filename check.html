@@ -61,6 +61,8 @@
         createReader,
         flattenToc,
         DEFAULT_TYPOGRAPHY,
+        BUNDLED_FONT_FAMILY,
+        BUNDLED_FONT_SRC,
       } from "/src/reader.ts";
       import { availableFonts, isFontAvailable } from "/src/fonts.ts";
 
@@ -84,7 +86,54 @@
         },
         availableFonts,
         isFontAvailable,
+        bundledFont: bundledFontState,
       };
+
+      /**
+       * 번들한 기본 본문 글꼴이 실제로 로드되는지를 **두 층**에서 본다.
+       * C8(WKWebView)에서는 본문 iframe 관측이 막힐 수 있어, 관측 한계와 실제
+       * 실패를 구분할 수 있게 층을 나눴다.
+       *
+       *  - `mainStatus`: 최상위 프레임에서 폰트 파일을 직접 로드해 본다. 어느 하네스에서든
+       *    관측 가능한 바닥이며, 패키징 누락·경로 오류를 잡는다.
+       *  - `sections`: 섹션 문서의 `FontFaceSet` 상태와 body 의 계산된 글꼴. 관측이 막히면
+       *    예외 대신 `unreachable: …` 문자열을 돌려 "실패" 와 구별한다.
+       */
+      async function bundledFontState() {
+        let mainStatus;
+        try {
+          const ff = new FontFace(
+            "__bundled_probe__",
+            `url("${BUNDLED_FONT_SRC}")`,
+          );
+          await ff.load();
+          mainStatus = ff.status;
+        } catch (e) {
+          mainStatus = `error: ${e?.message ?? e}`;
+        }
+
+        let sections;
+        try {
+          const contents =
+            document.querySelector("foliate-view")?.renderer?.getContents?.() ??
+            [];
+          sections = contents.map(({ doc }) => ({
+            face:
+              [...doc.fonts].find((f) => f.family === BUNDLED_FONT_FAMILY)
+                ?.status ?? null,
+            bodyFamily: doc.defaultView.getComputedStyle(doc.body).fontFamily,
+          }));
+        } catch (e) {
+          sections = `unreachable: ${e?.message ?? e}`;
+        }
+
+        return {
+          family: BUNDLED_FONT_FAMILY,
+          src: BUNDLED_FONT_SRC,
+          mainStatus,
+          sections,
+        };
+      }
 
       const opened = async (blob, lastLocation) => {
         await reader.open(blob, lastLocation);

@@ -1,6 +1,7 @@
 // foliate-js 렌더러 래퍼. Tauri API를 일절 쓰지 않는다 —
 // 그래야 브라우저(Playwright)와 WKWebView 하네스에서 그대로 검증할 수 있다.
 import "../vendor/foliate-js/view.js";
+import bundledFontUrl from "./assets/RIDIBatang.woff2?url";
 
 export type TocItem = {
   label: string;
@@ -15,7 +16,12 @@ export type Location = {
 
 /** 전역 타이포그래피 설정. 책의 속성이 아니라 읽는 사람의 속성이다. */
 export type Typography = {
-  /** null = epub 자체 지정을 존중(아무것도 주입하지 않음) */
+  /**
+   * null = 미설정 → 기본 본문 글꼴({@link BUNDLED_FONT_FAMILY}).
+   *
+   * **"epub 자체 지정을 존중" 이라는 뜻이 아니다.** 본문에는 언제나 글꼴이 주입된다 —
+   * 책 자체 글꼴을 그대로 보는 선택지는 이 앱에 없다(ADR 260730-001332).
+   */
   fontFamily: string | null;
   fontScale: number;
   lineHeight: number;
@@ -38,13 +44,42 @@ export const DEFAULT_TYPOGRAPHY: Typography = {
 const FONT_TARGETS =
   "html, body, p, li, blockquote, dd, dt, div, span, h1, h2, h3, h4, h5, h6, td, th, figcaption";
 
+/**
+ * 앱에 번들해 나가는 기본 본문 글꼴(리디바탕)의 `@font-face` 패밀리 이름.
+ *
+ * **일부러 설치된 글꼴과 겹치지 않는 이름을 쓴다.** `@font-face` 의 패밀리 이름은 우리가
+ * 정하는 임의 레이블이므로 파일 내부 이름과 같을 필요가 없는데, 개발 머신에는 리디바탕이
+ * 이미 설치돼 있어서 `리디바탕` 으로 선언하면 **번들 파일 로드가 실패해도 시스템 설치본이
+ * `document.fonts.check()` 를 만족시켜 검증이 공허해진다.** 이 이름으로 렌더됐다는 것은
+ * 번들 파일에서 왔다는 것 외에 다른 해석이 없다.
+ *
+ * 사용자에게 보이는 이름은 `fonts.ts` 의 `label`(리디바탕)이다.
+ * 출처·라이선스는 `src/assets/RIDIBatang.LICENSE.md`, 번들 결정은 ADR 260730-001332.
+ */
+export const BUNDLED_FONT_FAMILY = "RIDIBatang Bundled";
+
+/**
+ * 번들 글꼴 파일의 **절대** URL.
+ *
+ * 섹션 문서는 blob: URL 이라 **상대 경로의 base 가 없다** — 절대 URL 로 만들어 넣어야 한다.
+ * CORS 는 문제가 되지 않는다: blob: URL 은 생성 문서의 origin 을 상속하므로
+ * 섹션 iframe 은 앱과 same-origin 이다 (paginator.js 가 iframe.src 에 blob URL 을 넣는다).
+ */
+export const BUNDLED_FONT_SRC = new URL(bundledFontUrl, location.href).href;
+
 // 본문에 주입할 스타일. epub 자체 CSS를 덮어쓰지 않도록 최소한만 건드린다.
 // html 의 font-size 를 배율로 잡으면 em/% 기반인 epub 본문이 함께 따라온다.
 const bookCss = (t: Typography) => {
-  const family = t.fontFamily?.replace(/["\\]/g, "");
+  // null = 미설정 → 번들한 기본 본문 글꼴. 본문에는 언제나 글꼴이 주입된다.
+  const family = (t.fontFamily ?? BUNDLED_FONT_FAMILY).replace(/["\\]/g, "");
   return `
+  @font-face {
+    font-family: "${BUNDLED_FONT_FAMILY}";
+    src: url("${BUNDLED_FONT_SRC}") format("woff2");
+    font-display: block;
+  }
   html { font-size: ${Math.round(t.fontScale * 100)}%; }
-  ${family ? `${FONT_TARGETS} { font-family: "${family}" !important; }` : ""}
+  ${FONT_TARGETS} { font-family: "${family}" !important; }
   p, li, blockquote, dd {
     line-height: ${t.lineHeight};
     letter-spacing: ${t.letterSpacing}em;

@@ -150,10 +150,19 @@ tasks:
         fi
 
   check:c1:
-    desc: "C1 빌드 — .app 이 생성되는가"
+    desc: "C1 빌드 — .app 이 생성되고 번들 글꼴이 실려 나가는가"
     cmds:
       - pnpm tauri build
       - test -d {{.APP}}
+      # 번들 글꼴이 **패키징된 앱 안에** 실제로 들어갔는가.
+      #
+      # 이 단언 없이는 구멍이 남는다: C3·C8 은 vite dev 서버(localhost:1420)에서 돌고
+      # C9 는 실앱을 쓰지만 글꼴을 보지 않으므로, **에셋이 번들에서 빠져도 C1–C9 가 전부
+      # 통과한다.** 그러면 개발에서는 멀쩡하고 배포한 앱에만 글꼴이 없다.
+      #
+      # Tauri v2 는 프론트엔드를 바이너리에 임베드하므로 Resources/ 에 loose 파일이
+      # 없는 것이 정상이다 — 그래서 파일 존재가 아니라 **바이너리 안의 woff2 시그니처**를 본다.
+      - bash scripts/checks/bundled-font.sh
 
   check:c2:
     desc: "C2 정적 검증 — tsc + clippy"

@@ -1,10 +1,14 @@
 // C8 드라이버 — WKWebView 안에서 실행된다. callAsyncJavaScript 로 호출되므로
 // 최상위 await 를 쓸 수 있고, 반환한 JSON 문자열이 그대로 네이티브로 넘어간다.
 //
-// 관측 범위의 한계: foliate 의 shadow root 가 mode:'closed' 라 페이지 JS 에서
-// 렌더러나 본문 iframe 에 접근할 수 없다. 그래서 본문 텍스트 단언은 하지 않고
-// (그건 Chromium 의 C3 담당), **메인 프레임에서 보이는 것**만 검증한다:
+// 관측 범위: 주로 **메인 프레임에서 보이는 것**을 검증한다 —
 // 목차 파싱 · CFI 생성 · 페이지 넘김 · 섹션 이동 · 두 번째 책 교체.
+// 본문 텍스트 단언은 여전히 Chromium 의 C3 담당이다.
+//
+// 다만 "본문 iframe 에 전혀 접근할 수 없다" 는 것은 사실이 아니다(전에 그렇게 적어 뒀다).
+// shadow root 는 mode:'closed' 이지만 `foliate-view.renderer.getContents()` 는 요소의
+// 공개 프로퍼티라서 섹션 문서에 닿는다 — 아래 3b 가 WKWebView 에서 실제로 그렇게 읽는다
+// (`fontSections: "loaded"` 로 확인). 그래도 관측 실패와 검증 실패는 구분해서 다룬다.
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -46,6 +50,28 @@ const cfi1 = await poll(() => cfi());
 if (!cfi1 || !cfi1.includes("epubcfi("))
   throw new Error(`CFI 가 생성되지 않았다: ${cfi1}`);
 
+// 3b. 번들한 기본 본문 글꼴이 WKWebView 에서도 로드되는가.
+//     이미지 넘침 회귀가 WKWebView 에서만 재현된 전례가 있어 Chromium 통과를 근거로
+//     건너뛰지 않는다. 관측 한계와 실제 실패는 구분한다 —
+//     섹션 문서에 닿지 못하면(`unreachable: …`) 최상위 로드 결과만으로 판정한다.
+const font = await c.bundledFont();
+if (font.mainStatus !== "loaded")
+  throw new Error(
+    `번들 글꼴을 최상위 프레임에서 로드하지 못했다 (${font.mainStatus}) — src=${font.src}`,
+  );
+if (Array.isArray(font.sections)) {
+  if (font.sections.length === 0)
+    throw new Error("섹션 문서를 하나도 얻지 못했다 — getContents() 가 비었다");
+  for (const s of font.sections) {
+    if (s.face !== "loaded")
+      throw new Error(`섹션 문서에서 번들 글꼴이 로드되지 않았다 (status=${s.face})`);
+    if (!s.bodyFamily.includes(font.family))
+      throw new Error(
+        `섹션 본문이 번들 글꼴로 렌더되지 않았다 (font-family=${s.bodyFamily})`,
+      );
+  }
+}
+
 // 4. 페이지 넘김
 c.reader.goRight();
 const cfi2 = await changedFrom(cfi1);
@@ -79,6 +105,11 @@ return JSON.stringify({
     "replaceSync" in CSSStyleSheet.prototype,
   tocA: tocA.length,
   tocB: tocB.length,
+  // 번들 글꼴: 최상위 로드 상태와, 섹션 관측이 가능했는지 여부까지 남긴다.
+  fontMainStatus: font.mainStatus,
+  fontSections: Array.isArray(font.sections)
+    ? font.sections.map((s) => s.face).join(",")
+    : font.sections,
   cfi1,
   cfi2,
   cfi3,

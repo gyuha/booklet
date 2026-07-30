@@ -433,6 +433,147 @@ test("타이포그래피 설정이 본문에 반영된다", async ({ page }) => 
   }
 });
 
+// 번들한 기본 본문 글꼴(리디바탕)이 실제로 로드되어 본문에 적용되는가.
+//
+// **단언 설계에 함정이 둘 있어 프로브로 확인하고 고쳤다. 손대기 전에 읽어라.**
+//  1. `document.fonts.check()` 는 쓸 수 없다. "그 글꼴이 있는가" 가 아니라 "이 문자들을
+//     렌더할 수 있는가" 를 답하므로 폴백으로도 참이 된다 — 실측: 존재하지 않는 이름에도
+//     `true` 를 돌려줬다. 대신 **`FontFaceSet` 항목의 `status`** 를 본다.
+//  2. 폭 측정 span 에는 **인라인 `!important`** 가 필요하다. 주입 규칙이
+//     `span { font-family: ... !important }` 라서 보통의 인라인 선언은 진다 — 이걸 놓치면
+//     네 후보의 폭이 전부 같게 나와(실측 1228.61 ×4) 아무것도 구별하지 못한다.
+//
+// 개발 머신에는 리디바탕이 **이미 설치돼 있다.** 그래서 `@font-face` 패밀리 이름을 설치
+// 글꼴과 겹치지 않는 `RIDIBatang Bundled` 로 둔 것이 이 체크가 공허해지지 않는 이유다 —
+// 그 이름이 로드됐다는 건 번들 파일에서 왔다는 것 외에 해석이 없다. 이름을 `리디바탕` 으로
+// 바꾸면 번들 로드가 실패해도 시스템 설치본이 대신 통과시킨다.
+const BUNDLED_FAMILY = "RIDIBatang Bundled";
+
+test("번들한 기본 본문 글꼴이 로드되어 본문에 적용된다", async ({ page }) => {
+  /** 본문 프레임(텍스트가 가장 많은 프레임)에서 로드 상태와 폭 대조를 읽는다. */
+  const probe = async () => {
+    const frames = page.frames().filter((f) => f !== page.mainFrame());
+    const sized = await Promise.all(
+      frames.map(async (f) => ({
+        f,
+        n: await f
+          .evaluate(() => document.body?.textContent?.length ?? 0)
+          .catch(() => 0),
+      })),
+    );
+    const best = sized.sort((a, b) => b.n - a.n)[0];
+    if (!best || best.n === 0) return null;
+    return best.f
+      .evaluate((fam: string) => {
+        const face = Array.from(
+          (document as any).fonts as Set<FontFace>,
+        ).find((x) => x.family === fam);
+        // 인라인 !important 로 써야 주입된 규칙을 이긴다 (위 주석 2번).
+        const measure = (family: string) => {
+          const s = document.createElement("span");
+          s.textContent = "가나다라마바사아자차 The quick brown fox";
+          s.style.cssText =
+            "position:absolute;visibility:hidden;white-space:nowrap;font-size:64px";
+          s.style.setProperty("font-family", family, "important");
+          document.body.append(s);
+          const w = s.getBoundingClientRect().width;
+          s.remove();
+          return w;
+        };
+        return {
+          faceStatus: face?.status ?? null,
+          bodyFamily: getComputedStyle(document.body).fontFamily,
+          wBundled: measure(`"${fam}"`),
+          wBogus: measure('"NoSuchFont-XYZ-12345"'),
+          wSerif: measure("serif"),
+        };
+      }, BUNDLED_FAMILY)
+      .catch(() => null);
+  };
+
+  await page.goto("/check.html");
+  await page.evaluate(() => (window as any).check.openUrl("/fixtures/a.epub"));
+  await expect
+    .poll(() => page.evaluate(() => (window as any).check.openCount), {
+      timeout: 60_000,
+    })
+    .toBe(1);
+
+  await expect.poll(probe, { timeout: 30_000 }).not.toBeNull();
+  const v = (await probe())!;
+
+  // (a) 번들 파일이 실제로 로드됐는가. 404·경로 오류면 status 가 error 가 된다.
+  expect(
+    v.faceStatus,
+    `번들 글꼴이 로드되지 않았다 (status=${v.faceStatus}) — @font-face 의 절대 URL 이 섹션 blob: 문서에서 해석되지 못한 것`,
+  ).toBe("loaded");
+
+  // (b) 아무 설정도 하지 않은 기본 상태에서 본문에 적용됐는가.
+  expect(v.bodyFamily, "기본 상태에서 본문이 번들 글꼴로 렌더되지 않았다").toContain(
+    BUNDLED_FAMILY,
+  );
+
+  // (c) 선언만 되고 조용히 폴백된 것이 아닌가 — 대조군과 폭이 달라야 한다.
+  expect(
+    Math.abs(v.wBundled - v.wBogus),
+    "번들 글꼴의 렌더 폭이 '존재하지 않는 글꼴'과 같다 — 선언만 되고 폴백된 것",
+  ).toBeGreaterThan(1);
+  expect(
+    Math.abs(v.wBundled - v.wSerif),
+    "번들 글꼴의 렌더 폭이 serif 와 같다 — 폴백된 것",
+  ).toBeGreaterThan(1);
+});
+
+// 글꼴을 바꿨다가 기본값으로 되돌아오는 왕복. `fontFamily: null` 의 의미가
+// "미설정 → 번들 기본 글꼴" 로 뒤집혔으므로, null 로 되돌리면 리디바탕이어야 한다.
+test("다른 글꼴로 바꾼 뒤 기본값으로 되돌아온다", async ({ page }) => {
+  const bodyFamily = async () => {
+    const frames = page.frames().filter((f) => f !== page.mainFrame());
+    const sized = await Promise.all(
+      frames.map(async (f) => ({
+        f,
+        n: await f
+          .evaluate(() => document.body?.textContent?.length ?? 0)
+          .catch(() => 0),
+      })),
+    );
+    const best = sized.sort((a, b) => b.n - a.n)[0];
+    if (!best || best.n === 0) return null;
+    return best.f
+      .evaluate(() => getComputedStyle(document.body).fontFamily)
+      .catch(() => null);
+  };
+
+  await page.goto("/check.html");
+  await page.evaluate(() => (window as any).check.openUrl("/fixtures/a.epub"));
+  await expect
+    .poll(() => page.evaluate(() => (window as any).check.openCount), {
+      timeout: 60_000,
+    })
+    .toBe(1);
+
+  await expect.poll(bodyFamily, { timeout: 30_000 }).toContain(BUNDLED_FAMILY);
+
+  // 설치된 실제 글꼴로 바꾼다.
+  const fonts: { label: string; family: string | null }[] = await page.evaluate(
+    () => (window as any).check.availableFonts(),
+  );
+  const other = fonts.find((f) => f.family)?.family;
+  expect(other, "설치된 글꼴 후보를 하나도 찾지 못했다").toBeTruthy();
+
+  await page.evaluate(
+    (family) => (window as any).check.setTypography({ fontFamily: family }),
+    other!,
+  );
+  await expect.poll(bodyFamily, { timeout: 20_000 }).toContain(other!);
+
+  // null 로 되돌리면 번들 기본 글꼴로 돌아와야 한다.
+  await page.evaluate(() =>
+    (window as any).check.setTypography({ fontFamily: null }),
+  );
+  await expect.poll(bodyFamily, { timeout: 20_000 }).toContain(BUNDLED_FAMILY);
+});
+
 // 설치되지 않은 글꼴은 목록에서 걸러져야 한다. 걸러지지 않으면 사용자가 고른 뒤
 // "아무 일도 안 일어나는" 설정을 만나게 된다.
 test("설치되지 않은 글꼴은 목록에서 걸러진다", async ({ page }) => {
@@ -449,7 +590,14 @@ test("설치되지 않은 글꼴은 목록에서 걸러진다", async ({ page })
   const fonts: { label: string; family: string | null }[] = await page.evaluate(
     () => (window as any).check.availableFonts(),
   );
-  expect(fonts[0].family, "첫 항목은 항상 기본값 유지여야 한다").toBeNull();
+  // 첫 항목은 번들한 기본 본문 글꼴이다. `family: null` 은 "미설정 → 리디바탕" 을 뜻하며
+  // "epub 자체 지정 존중" 이 아니다 — 그 선택지는 의도적으로 없앴다(ADR 260730-001332).
+  expect(fonts[0].family, "첫 항목은 기본 본문 글꼴(family: null)이어야 한다").toBeNull();
+  expect(fonts[0].label, "첫 항목의 이름이 리디바탕이 아니다").toBe("리디바탕");
+  expect(
+    fonts.some((f) => f.label === "본문 기본값 유지"),
+    "없앤 '본문 기본값 유지' 항목이 목록에 남아 있다",
+  ).toBe(false);
   expect(
     fonts.some((f) => f.family === "NoSuchFont-XYZ-12345"),
     "없는 글꼴이 목록에 들어갔다",

@@ -144,6 +144,12 @@ xattr -dr com.apple.quarantine /Applications/booklet.app
 
 epub 을 booklet 으로 열려면 Finder 에서 우클릭 → "다음으로 열기". 기본 앱 자리는
 건드리지 않으므로 Finder 의 표지 썸네일은 그대로 유지됩니다.
+
+## 글꼴
+
+본문 기본 글꼴로 **리디바탕**을 함께 담았습니다. 리디주식회사가 SIL Open Font
+License 1.1 로 배포하는 글꼴이며, 원본 OTF 를 WOFF2 로 형식만 변환했습니다.
+Copyright © 2019 RIDI & Sandoll. <https://ridicorp.com/ridibatang/>
 NOTES
 )
 
