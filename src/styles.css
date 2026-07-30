@@ -74,6 +74,55 @@ foliate-view {
   height: 100%;
 }
 
+/* ─────────────── 읽기 진행률 인디게이터 ─────────────── */
+
+/* z-index 는 패널(15)보다 낮다 — 패널이 열리면 그 아래로 지나간다.
+   목차를 보는 중에 진행률이 가려지는 것은 무해하다.
+   pointer-events: none — 본문 클릭·드래그 선택을 가로막지 않는다. */
+#progress {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 12;
+  pointer-events: none;
+}
+
+#progress[hidden] {
+  display: none;
+}
+
+/* 본문 마지막 줄과 **간헐적으로** 겹친다: paginator 의 본문 행은 줄 단위로
+   채워지므로 하단 빈틈이 섹션마다 8px(여백만)~45px(여백 + 줄 나머지) 사이로 변한다.
+   흰 헤일로는 겹치지 않을 때 전혀 보이지 않고, 겹칠 때만 글자 주변을 살짝 흐린다.
+   상자나 배경 반투명이 아니므로 평소에는 흔적이 없다 — 불필요하면 text-shadow 한 줄만 지우면 된다. */
+#progress-pct {
+  display: block;
+  padding: 0 10px 3px;
+  font-size: 10px;
+  line-height: 1;
+  text-align: right;
+  color: #bbb;
+  font-variant-numeric: tabular-nums;
+  text-shadow:
+    0 0 3px #fff,
+    0 0 2px #fff;
+}
+
+/* 3px, 창 전체 폭, 하단 가장자리. paginator 의 하단 여백(최소 8px) 안에 들어가므로
+   본문과 겹치지 않는다. */
+#progress-track {
+  height: 3px;
+  background: #ececec;
+}
+
+#progress-fill {
+  width: 0;
+  height: 100%;
+  background: #999;
+  transition: width 0.15s ease;
+}
+
 /* ─────────────── 사이드 패널 (목차 / 설정 탭) ─────────────── */
 
 /* 읽는 중에는 눈에 걸리지 않아야 하므로 기본은 투명하다.

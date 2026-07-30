@@ -6,6 +6,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { createReader, flattenToc, type Typography } from "./reader";
 import { availableFonts } from "./fonts";
+import { renderProgress } from "./progress";
 
 /** state.json 과 1:1. 타이포그래피는 전역이라 positions 처럼 책별로 갖지 않는다. */
 type AppState = {
@@ -29,6 +30,9 @@ const panelToggle = document.querySelector<HTMLButtonElement>("#panel-toggle")!;
 const panelEl = document.querySelector<HTMLElement>("#panel")!;
 const tocBody = document.querySelector<HTMLElement>("#toc")!;
 const settingsBody = document.querySelector<HTMLElement>("#settings")!;
+const progressEl = document.querySelector<HTMLElement>("#progress")!;
+const progressFill = document.querySelector<HTMLElement>("#progress-fill")!;
+const progressPct = document.querySelector<HTMLElement>("#progress-pct")!;
 const tabButtons = Array.from(
   document.querySelectorAll<HTMLButtonElement>(".panel-tab"),
 );
@@ -257,6 +261,7 @@ async function openPath(rawPath: string): Promise<boolean> {
     document.title = name.replace(/\.epub$/i, "");
     renderToc();
     panelToggle.hidden = false;
+    progressEl.hidden = false;
     setPanelVisible(false);
     return true;
   } catch (e) {
@@ -266,6 +271,7 @@ async function openPath(rawPath: string): Promise<boolean> {
       readerEl.hidden = true;
       emptyEl.hidden = false;
       panelToggle.hidden = true;
+      progressEl.hidden = true;
     }
     showError(`열지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
     return false;
@@ -334,6 +340,10 @@ reader.onKeydown((e) => {
 });
 
 reader.onRelocate((loc) => {
+  // **아래 조기 반환보다 먼저** 갱신한다. 뒤에 두면 currentPath 나 cfi 가 없는
+  // relocate 에서 진행률이 조용히 멈춘다.
+  renderProgress(progressFill, progressPct, loc.fraction);
+
   if (!currentPath || !loc.cfi) return;
   state.positions[currentPath] = loc.cfi;
   scheduleSave();

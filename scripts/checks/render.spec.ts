@@ -433,6 +433,84 @@ test("타이포그래피 설정이 본문에 반영된다", async ({ page }) => 
   }
 });
 
+// 읽기 진행률 인디게이터가 하단에서 실제로 갱신되는가.
+//
+// 인디게이터는 앱 크롬이라 이 하네스에서는 `check.html` 의 대역을 본다. 다만 갱신은
+// **앱과 같은 `src/progress.ts` 함수**를 호출하므로 검증되는 것은 실물 로직이다.
+// 스타일(3px·하단 가장자리·회색조·헤일로)은 styles.css 에만 있어 여기서 보이지 않는다 —
+// 배치와 색은 사람 UAT 담당이고, 여기서는 fraction → (바 폭, 텍스트, 표시 여부)만 본다.
+test("읽기 진행률 인디게이터가 하단에서 갱신된다", async ({ page }) => {
+  /** 바 폭(%)과 퍼센트 텍스트를 함께 읽는다. 둘은 같은 정수여야 한다. */
+  const indicator = () =>
+    page.evaluate(() => {
+      const box = document.querySelector<HTMLElement>("#progress")!;
+      const fill = document.querySelector<HTMLElement>("#progress-fill")!;
+      const pct = document.querySelector<HTMLElement>("#progress-pct")!;
+      return {
+        hidden: box.hidden,
+        width: fill.style.width,
+        text: pct.textContent ?? "",
+      };
+    });
+
+  await page.goto("/check.html");
+
+  // (c) 책을 열기 전에는 보이지 않는다.
+  expect(
+    (await indicator()).hidden,
+    "책이 없는데 진행률 인디게이터가 보인다",
+  ).toBe(true);
+
+  await page.evaluate(() => (window as any).check.openUrl("/fixtures/a.epub"));
+  await expect
+    .poll(() => page.evaluate(() => (window as any).check.openCount), {
+      timeout: 60_000,
+    })
+    .toBe(1);
+  await expect.poll(() => lastCfi(page), { timeout: 30_000 }).not.toBeNull();
+
+  const first = await indicator();
+  expect(first.hidden, "책을 열었는데 인디게이터가 숨어 있다").toBe(false);
+  expect(first.width, "바 폭이 설정되지 않았다 (갱신이 돌지 않음)").toMatch(
+    /^\d+%$/,
+  );
+  expect(
+    first.text,
+    "퍼센트 텍스트가 바 폭과 다르다",
+  ).toBe(first.width);
+
+  // (a) 뒤쪽 섹션으로 이동하면 진행률이 커진다.
+  //     첫 몇 페이지 넘김은 반올림 후 0%→1% 라 판정이 무르다. 목차로 크게 건너뛴다.
+  const toc: { href: string }[] = await page.evaluate(() =>
+    (window as any).check.toc().map((i: any) => ({ href: i.href })),
+  );
+  const later =
+    toc[Math.floor(toc.length * 0.75)] ?? toc[Math.max(0, toc.length - 1)];
+  await goTo(page, later.href);
+  await expect
+    .poll(async () => parseInt((await indicator()).width, 10), {
+      timeout: 20_000,
+    })
+    .toBeGreaterThan(parseInt(first.width, 10));
+
+  const mid = await indicator();
+  expect(mid.text, "이동 후 퍼센트 텍스트가 바 폭과 어긋났다").toBe(mid.width);
+
+  // (b) 책의 끝에서 100% 에 근접한다. 본문에 포커스를 준 뒤 End.
+  const viewport = page.viewportSize()!;
+  await page.mouse.click(
+    Math.round(viewport.width / 2),
+    Math.round(viewport.height / 2),
+  );
+  await page.waitForTimeout(400);
+  await page.keyboard.press("End");
+  await expect
+    .poll(async () => parseInt((await indicator()).width, 10), {
+      timeout: 20_000,
+    })
+    .toBeGreaterThanOrEqual(95);
+});
+
 // 번들한 기본 본문 글꼴(리디바탕)이 실제로 로드되어 본문에 적용되는가.
 //
 // **단언 설계에 함정이 둘 있어 프로브로 확인하고 고쳤다. 손대기 전에 읽어라.**
