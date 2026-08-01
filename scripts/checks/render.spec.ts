@@ -313,6 +313,31 @@ test("마우스 휠로 이전/다음 페이지로 이동한다", async ({ page }
   await expect
     .poll(() => lastCfi(page), { timeout: 15_000 })
     .not.toBe(afterClick);
+
+  // (4) **작은 델타 한 번으로도 넘어가야 한다.** 노치당 deltaY 는 장치마다 크게 다르고,
+  //     예전의 누적 임계값(60)에서는 작은 값을 주는 마우스로 십여 번을 굴려야 한 장이
+  //     넘어갔다(사람 UAT 보고). 10 은 그 임계값보다 훨씬 작으므로, 누적 방식으로
+  //     되돌리면 이 단언이 깨진다.
+  await page.waitForTimeout(500);
+  const beforeSmall = await lastCfi(page);
+  await page.mouse.wheel(0, 10);
+  await expect
+    .poll(() => lastCfi(page), { timeout: 15_000 })
+    .not.toBe(beforeSmall);
+
+  // (5) 가로 스크롤은 페이지를 넘기지 않는다 (deltaY≈0 이면 방향도 정할 수 없다).
+  await page.waitForTimeout(500);
+  const beforeSide = await lastCfi(page);
+  const sideCount = await page.evaluate(
+    () => (window as any).check.locations.length,
+  );
+  await page.mouse.wheel(120, 0);
+  await page.waitForTimeout(700);
+  expect(
+    await page.evaluate(() => (window as any).check.locations.length),
+    "가로로만 굴렸는데 페이지가 넘어갔다",
+  ).toBe(sideCount);
+  expect(await lastCfi(page), "가로 스크롤로 위치가 변했다").toBe(beforeSide);
 });
 
 // 자체 스크롤을 가진 앱 크롬(실앱의 목차 패널) 위에서는 휠이 페이지를 넘기지 말고
@@ -835,6 +860,287 @@ test("스페이스·아래·위 키로 페이지를 이동하고 폼 컨트롤�
     await lastCfi(page),
     "슬라이더에 포커스가 있는데 페이지가 넘어갔다",
   ).toBe(cfiBefore);
+});
+
+// 본문 좌우 1/3 클릭으로 페이지 넘김. 중앙 1/3 은 무동작이다.
+//
+// **좌표에 함정이 있어 프로브로 확인한 뒤 단언을 썼다. 손대기 전에 읽어라.**
+// 섹션 iframe 은 페이지 하나가 아니라 **컬럼 스트립 전체 폭**으로 늘어난 뒤 컨테이너가
+// 가로 스크롤된다. 그래서 iframe 안의 `e.clientX` 는 창 좌표가 아니다 — 실측: 2페이지째에서
+// 창 x=128 을 클릭하면 `clientX` 가 **1264** 로 들어온다(그대로 쓰면 좌측 클릭이 우측 존으로
+// 판정된다). 따라서 (a)(b) 는 **본문 iframe 위 클릭**으로 검증해야 한다. 여백(최상위 문서)
+// 클릭만 보면 좌표 환산이 틀려도 통과하므로, (e) 는 그 여백 경로를 따로 덮는 대조군이다.
+test("본문 좌우 1/3 클릭으로 페이지를 넘기고 중앙은 무동작이다", async ({ page }) => {
+  const relocateCount = () =>
+    page.evaluate(() => (window as any).check.locations.length);
+  const lastFraction = (p: Page) =>
+    p.evaluate(() => (window as any).check.locations.at(-1)?.fraction ?? null);
+
+  /** 본문 프레임들 중 가장 긴 선택 텍스트. 드래그가 실제로 선택했는지 확인하는 대조군. */
+  const selectionText = async () => {
+    const texts = await Promise.all(
+      page
+        .frames()
+        .filter((f) => f !== page.mainFrame())
+        .map((f) =>
+          f
+            .evaluate(() => document.getSelection()?.toString() ?? "")
+            .catch(() => ""),
+        ),
+    );
+    return texts.sort((a, b) => b.length - a.length)[0] ?? "";
+  };
+
+  await page.goto("/check.html");
+  await page.evaluate(() => (window as any).check.openUrl("/fixtures/a.epub"));
+  await expect
+    .poll(() => page.evaluate(() => (window as any).check.openCount), {
+      timeout: 60_000,
+    })
+    .toBe(1);
+  await expect.poll(() => lastCfi(page), { timeout: 30_000 }).not.toBeNull();
+
+  // 산문 섹션으로 이동한다 — 표지 페이지에서는 클릭 지점에 본문이 없다.
+  const toc: { href: string }[] = await page.evaluate(() =>
+    (window as any).check.toc().map((i: any) => ({ href: i.href })),
+  );
+  for (const item of toc.slice(0, 10)) {
+    await goTo(page, item.href);
+    await page.waitForTimeout(400);
+    if ((await contentText(page)).length >= 500) break;
+  }
+  expect(
+    (await contentText(page)).length,
+    "본문 500자를 가진 섹션을 찾지 못했다",
+  ).toBeGreaterThanOrEqual(500);
+
+  const vp = page.viewportSize()!;
+  const y = Math.round(vp.height / 2);
+  // 좌우 존 안쪽이면서 본문 iframe 위(좌우 여백 48px 밖)인 지점.
+  const LEFT = Math.round(vp.width * 0.15);
+  const RIGHT = Math.round(vp.width * 0.85);
+  const MID = Math.round(vp.width / 2);
+
+  const clickAndSettle = async (x: number) => {
+    const n = await relocateCount();
+    await page.mouse.click(x, y);
+    await expect.poll(relocateCount, { timeout: 15_000 }).toBeGreaterThan(n);
+    await page.waitForTimeout(300); // 연속 relocate 의 마지막까지 기다린다
+    return (await lastCfi(page)) as string;
+  };
+
+  const start = (await lastCfi(page)) as string;
+  const startFraction = (await lastFraction(page)) as number;
+
+  // (a) 우측 1/3 → **앞으로**. 진행률로 단언한다 — CFI 왕복만 보면 좌우가 뒤바뀌어도
+  //     대칭이라 통과한다(실제로 무력화 테스트에서 통과시켜 이 단언으로 바꿨다).
+  const afterRight = await clickAndSettle(RIGHT);
+  expect(afterRight, "우측 1/3 을 클릭했는데 페이지가 넘어가지 않았다").not.toBe(
+    start,
+  );
+  expect(
+    await lastFraction(page),
+    "우측 1/3 을 클릭했는데 진행률이 늘지 않았다 — 뒤로 갔을 가능성",
+  ).toBeGreaterThan(startFraction);
+
+  // (b) 좌측 1/3 → **뒤로**. 원래 자리로 돌아와야 한다.
+  const afterLeft = await clickAndSettle(LEFT);
+  expect(afterLeft, "좌측 1/3 을 클릭했는데 원래 위치로 돌아오지 않았다").toBe(
+    start,
+  );
+  expect(
+    await lastFraction(page),
+    "좌측 1/3 클릭 후 진행률이 출발점으로 돌아오지 않았다",
+  ).toBeCloseTo(startFraction, 5);
+
+  // (c) 중앙 1/3 → 무동작
+  const nMid = await relocateCount();
+  await page.mouse.click(MID, y);
+  await page.waitForTimeout(700);
+  expect(
+    await relocateCount(),
+    "중앙 1/3 을 클릭했는데 페이지가 넘어갔다",
+  ).toBe(nMid);
+  expect(await lastCfi(page), "중앙 1/3 클릭으로 위치가 변했다").toBe(start);
+
+  // (d) 드래그로 텍스트를 선택한 뒤의 click 에서는 넘기지 않는다 (복사 경로 보호).
+  //     판정은 **선택 유무가 아니라 이동 거리**다 — (i) 의 주석을 함께 읽어라.
+  const nDrag = await relocateCount();
+  await page.mouse.move(Math.round(vp.width * 0.55), y);
+  await page.mouse.down();
+  await page.mouse.move(RIGHT, y, { steps: 12 });
+  await page.mouse.up();
+  // 대조군: 드래그가 실제로 선택을 만들었는가. 선택이 비면 이 케이스는 공허하다.
+  await expect.poll(selectionText, { timeout: 5_000 }).not.toBe("");
+  await page.waitForTimeout(500);
+  expect(
+    await relocateCount(),
+    "텍스트를 드래그 선택했는데 페이지가 넘어갔다",
+  ).toBe(nDrag);
+
+  // (e) 좌우 여백(본문 iframe 밖 = 최상위 문서)에서 온 클릭도 존 판정을 받는다.
+  //     선택은 **섹션 iframe 문서**에 있다 — 최상위 document 만 지우면 (d) 의 가드가
+  //     계속 막아서 이 케이스가 엉뚱하게 실패한다(실제로 한 번 밟았다).
+  await page.evaluate(() => {
+    const contents =
+      (document.querySelector("foliate-view") as any)?.renderer?.getContents?.() ??
+      [];
+    for (const { doc } of contents) doc.getSelection()?.removeAllRanges();
+    document.getSelection()?.removeAllRanges();
+  });
+  expect(await selectionText(), "(e) 준비: 선택이 지워지지 않았다").toBe("");
+  const afterRight2 = await clickAndSettle(RIGHT);
+  expect(afterRight2, "(e) 준비: 우측 클릭이 듣지 않았다").not.toBe(start);
+  const afterMargin = await clickAndSettle(20);
+  expect(
+    afterMargin,
+    "좌측 여백(최상위 문서)을 클릭했는데 이전 페이지로 가지 않았다",
+  ).toBe(start);
+
+  // (f) 앱 크롬(목차 패널 대역) 위 클릭은 페이지를 넘기지 않는다 — 휠과 같은 가드.
+  //     크롬 폭 220px 은 좌측 1/3 안쪽이므로, 가드가 없으면 여기서 넘어간다.
+  await page.evaluate(() => {
+    document.querySelector<HTMLElement>("#chrome")!.hidden = false;
+  });
+  const nChrome = await relocateCount();
+  await page.mouse.click(110, 300);
+  await page.waitForTimeout(700);
+  expect(
+    await relocateCount(),
+    "앱 크롬 위를 클릭했는데 페이지가 넘어갔다",
+  ).toBe(nChrome);
+
+  // (g) **연속 클릭은 매번 넘긴다.** 빠르게 여러 번 클릭하면 두 번째 이후가 `detail` 2·3 으로
+  //     들어온다 — 그걸 걸러내면 연속 넘김이 죽는다(사람 UAT 에서 실제로 보고된 결함).
+  //     선택도 남지 않아야 한다: detail 2·3 은 브라우저가 단어·문단을 선택하는 값이다.
+  await page.evaluate(() => {
+    document.querySelector<HTMLElement>("#chrome")!.hidden = true;
+  });
+  for (const clickCount of [1, 2, 3]) {
+    const nRapid = await relocateCount();
+    await page.mouse.move(RIGHT, y);
+    await page.mouse.down({ clickCount });
+    await page.mouse.up({ clickCount });
+    await expect
+      .poll(relocateCount, { timeout: 15_000 })
+      .toBeGreaterThan(nRapid);
+    await page.waitForTimeout(250);
+    expect(
+      await selectionText(),
+      `detail=${clickCount} 클릭이 본문 선택을 남겼다`,
+    ).toBe("");
+  }
+
+  // (h) 링크 위 클릭은 존 판정에서 제외된다 — 본문 링크 이동은 `view.js` 가 처리하므로
+  //     우리가 페이지까지 넘기면 두 동작이 겹친다.
+  //
+  //     **책 안의 링크를 클릭하는 형태로는 단언할 수 없다**: 링크 이동(goTo)과 존 넘김이
+  //     동시에 걸려 최종 위치가 비결정적이 되므로 "넘어갔는가"를 가릴 수 없다. 그래서
+  //     여기서는 리더 표면 안에 앵커를 심고 그 위를 클릭해 **가드 한 줄 자체**를 본다
+  //     (최상위 문서 경로지만 가드는 같은 한 줄을 지난다 — 무력화하면 이 케이스가 깨진다).
+  //     실제 책의 각주 링크가 제자리로 뛰는지는 사람 UAT 항목이다.
+  await page.evaluate(() => {
+    const a = document.createElement("a");
+    a.href = "#__probe_link__";
+    a.id = "probe-link";
+    a.textContent = "링크";
+    a.style.cssText =
+      "position:fixed;top:40%;right:24px;z-index:40;padding:12px;background:#fff";
+    document.querySelector("#reader")!.append(a);
+  });
+  const nLink = await relocateCount();
+  await page.click("#probe-link");
+  await page.waitForTimeout(700);
+  expect(
+    await relocateCount(),
+    "링크 위를 클릭했는데 페이지가 넘어갔다",
+  ).toBe(nLink);
+  await page.evaluate(() => document.querySelector("#probe-link")!.remove());
+
+  // (i) **미세 드래그도 클릭으로 본다.** 사람 UAT 에서 나온 결함이다 — 실제 마우스는 클릭
+  //     순간에도 흔들리고, 실측(Chromium)으로 **5px 만 어긋나도 한 글자가 선택된다**.
+  //     "선택이 있으면 넘기지 않는다" 로 판정하던 초판은 그 흔들림에 걸려 페이지가 넘어가지
+  //     않고 글자만 하이라이트된 채 남았다. 그래서 판정을 이동 거리로 바꿨고, 임계값 안의
+  //     흔들림이 만든 선택은 지운다. 두 가지를 함께 단언한다: **넘어갔는가 + 선택이 없는가.**
+  for (const dx of [5, 8]) {
+    const nJitter = await relocateCount();
+    await page.mouse.move(RIGHT, y);
+    await page.mouse.down();
+    await page.mouse.move(RIGHT + dx, y);
+    await page.mouse.up();
+    await expect
+      .poll(relocateCount, { timeout: 15_000 })
+      .toBeGreaterThan(nJitter);
+    await page.waitForTimeout(300);
+    expect(
+      await selectionText(),
+      `${dx}px 흔들린 클릭이 본문 선택을 남겼다`,
+    ).toBe("");
+  }
+
+  // (j) 좌우 존 위에서는 커서가 방향을 드러낸다. **본문 문서와 최상위 컨테이너 양쪽**을
+  //     본다 — 본문이 iframe 이라 한쪽만 걸면 나머지 절반에서 커서가 바뀌지 않는다.
+  //
+  //     **이미지는 PNG 여야 한다 — WebKit 은 SVG 를 커서로 렌더하지 않는다.** 처음 SVG 로
+  //     넣었더니 실앱에서 이미지가 실패해 폴백 키워드로 떨어지고, macOS 가 그것을 좌우 양방향
+  //     화살표(↔)로 그려 방향이 사라졌다(사람 UAT 보고). 여기서 형식을 단언하는 이유다 —
+  //     Chromium 은 SVG 커서도 잘 그리므로 이 단언 없이는 회귀를 못 잡는다.
+  //     (실앱 엔진에서 커서가 실제로 그려지는지는 이 하네스로 관측할 수 없다 — 사람 UAT 몫.)
+  const cursors = async () => {
+    const inner = await Promise.all(
+      page
+        .frames()
+        .filter((f) => f !== page.mainFrame())
+        .map((f) =>
+          f
+            .evaluate(() => document.documentElement.style.cursor)
+            .catch(() => ""),
+        ),
+    );
+    return {
+      container: await page.evaluate(
+        () => document.querySelector<HTMLElement>("#reader")!.style.cursor,
+      ),
+      content: inner.sort((a, b) => b.length - a.length)[0] ?? "",
+    };
+  };
+
+  //     **같은 존 안에서 두 번 움직여야 한다.** foliate 의 `CursorAutohider` 가 mousemove
+  //     마다 `documentElement` 의 inline cursor 를 지우므로, 한 번만 움직여 보면 "존이
+  //     바뀔 때만 세팅" 하는 구현도 통과해 버린다 — 실제 앱에서 본문 위 커서가 사라진
+  //     결함을 이 케이스가 놓친 이유다.
+  for (const [x, keyword] of [
+    [LEFT, "w-resize"],
+    [RIGHT, "e-resize"],
+  ] as const) {
+    await page.mouse.move(x, y);
+    await page.waitForTimeout(80);
+    await page.mouse.move(x + 24, y + 12); // 같은 존 안에서 한 번 더
+    await page.waitForTimeout(150);
+    const c = await cursors();
+    for (const [where, value] of Object.entries(c)) {
+      expect(value, `${keyword} 존에서 ${where} 커서가 비어 있다`).toContain(
+        "data:image/png",
+      );
+      expect(
+        value,
+        `${keyword} 존 커서에 SVG 가 들어 있다 — WebKit 은 SVG 커서를 그리지 못한다`,
+      ).not.toContain("svg");
+      expect(
+        value,
+        `${keyword} 존 커서에 폴백 키워드가 없다`,
+      ).toContain(keyword);
+    }
+  }
+
+  // 중앙 1/3 에서는 존 커서를 걷는다 (본문 선택용 I-beam 으로 돌아가야 한다).
+  await page.mouse.move(MID, y);
+  await page.waitForTimeout(80);
+  await page.mouse.move(MID + 24, y + 12);
+  await page.waitForTimeout(150);
+  const mid = await cursors();
+  expect(mid.container, "중앙에서 컨테이너 커서가 남아 있다").toBe("");
+  expect(mid.content, "중앙에서 본문 커서가 남아 있다").toBe("");
 });
 
 // Home/End 는 **책 전체**의 처음·끝으로, PageUp/PageDown 은 이전·다음 페이지로.
