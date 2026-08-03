@@ -30,8 +30,12 @@ task deploy -- major   # "배포 major"
   다운로드한 앱은 quarantine 때문에 열리지 않는다. 릴리스 노트에 `xattr -dr` 한 줄이
   자동으로 들어간다. **다른 사람에게 배포하려면** Developer ID + 공증(연 $99)이 사실상
   필수이고, 그건 별도 작업이다 — 임의로 CI·서명 파이프라인을 만들지 마라.
-- `bundle.targets` 는 `["app"]` 이다. DMG 생성은 `bundle_dmg.sh` 가 Finder 자동화에
-  의존해 플레이키하고 마운트된 볼륨을 남겨서 껐다. 되살리지 마라.
+- `bundle.targets` 는 `["app"]` 이다. **Tauri 의 DMG 번들러는 되살리지 마라** —
+  `bundle_dmg.sh` 가 Finder 자동화에 의존해 플레이키하고, 실패하면 마운트된 볼륨을 남긴다.
+- 배포용 DMG 는 `scripts/make-dmg.sh` 가 **`hdiutil` 만으로** 굽는다(`task build` 가 빌드
+  직후 호출). Finder 자동화가 없고 `-srcfolder` 는 볼륨을 마운트하지 않으므로 위 실패 모드가
+  구조적으로 없다 — 대가는 창 배경·아이콘 좌표가 없다는 것뿐이다. 릴리스 산출물은 이
+  DMG 하나이며 zip 은 만들지 않는다.
 
 ## 검증
 

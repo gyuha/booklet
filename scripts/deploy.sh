@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GitHub 릴리스 배포. 버전을 올리고, 빌드하고, zip 을 만들어 릴리스에 올린다.
+# GitHub 릴리스 배포. 버전을 올리고, 빌드하고(= .app + DMG), DMG 를 릴리스에 올린다.
 #
 # 사용: task deploy            (patch)
 #       task deploy -- minor   (minor / major)
@@ -99,13 +99,14 @@ built=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist
 [ "$built" = "$next" ] ||
   { restore_versions; die "번들 버전($built)이 올린 버전($next)과 다르다"; }
 
-step "zip 만들기"
-# ditto 를 쓰는 이유: zip -r 은 .app 번들의 심볼릭 링크·메타데이터를 깨뜨린다.
-rm -rf "$DIST_DIR" && mkdir -p "$DIST_DIR"
-zipfile="$DIST_DIR/booklet-$next-macos-arm64.zip"
-ditto -c -k --keepParent "$APP" "$zipfile" ||
-  { restore_versions; die "zip 생성 실패"; }
-echo "  $zipfile ($(du -h "$zipfile" | cut -f1))"
+step "DMG 확인"
+# DMG 는 위 `task build` 가 scripts/make-dmg.sh 를 통해 이미 구웠다 (검증까지 마친 상태).
+# 여기서는 그것이 실제로 그 자리에 있는지만 본다 — 이름은 번들 버전에서 나오고, 그 번들
+# 버전은 바로 위에서 $next 와 같음을 확인했으므로 두 이름이 갈릴 수 없다.
+dmgfile="$DIST_DIR/booklet-$next-macos-arm64.dmg"
+[ -f "$dmgfile" ] ||
+  { restore_versions; die "DMG 가 없다: $dmgfile (task build 가 make-dmg.sh 를 돌렸는가?)"; }
+echo "  $dmgfile ($(du -h "$dmgfile" | cut -f1))"
 
 # ─────────────────── 커밋 · 태그 · 릴리스 ───────────────────
 
@@ -135,11 +136,17 @@ $changes
 
 ## 설치
 
-서명 인증서 없이 빌드했으므로 다운로드한 앱에는 quarantine 속성이 붙습니다.
-압축을 풀고 \`/Applications\` 로 옮긴 뒤 아래 한 줄을 실행하세요.
+DMG 를 열고 booklet.app 을 옆의 Applications 로 끌어다 놓은 뒤, 아래 한 줄을 실행하세요.
 
 \`\`\`
 xattr -dr com.apple.quarantine /Applications/booklet.app
+\`\`\`
+
+서명 인증서 없이 빌드했으므로 다운로드한 파일에는 quarantine 속성이 붙습니다. DMG 자체가
+"확인되지 않은 개발자" 로 열리지 않으면 먼저 DMG 의 속성을 벗기세요.
+
+\`\`\`
+xattr -d com.apple.quarantine ~/Downloads/booklet-$next-macos-arm64.dmg
 \`\`\`
 
 epub 을 booklet 으로 열려면 Finder 에서 우클릭 → "다음으로 열기". 기본 앱 자리는
@@ -153,7 +160,7 @@ Copyright © 2019 RIDI & Sandoll. <https://ridicorp.com/ridibatang/>
 NOTES
 )
 
-gh release create "$tag" "$zipfile" --title "$tag" --notes "$notes" ||
+gh release create "$tag" "$dmgfile" --title "$tag" --notes "$notes" ||
   die "릴리스 생성 실패 (태그는 푸시되어 있다 — gh release create $tag 로 재시도 가능)"
 
 echo ""

@@ -55,9 +55,12 @@ tasks:
       - pnpm tauri dev
 
   build:
-    desc: 릴리스 빌드 (.app 만 — DMG 는 로컬 전용이라 끔)
+    desc: 릴리스 빌드 (.app + 배포용 DMG → dist-release/)
     cmds:
+      # Tauri 는 .app 만 만든다(bundle.targets: ["app"]). DMG 는 Finder 자동화에 의존하는
+      # Tauri 번들러 대신 hdiutil 로 굽는다 — 이유는 scripts/make-dmg.sh 머리말 참조.
       - pnpm tauri build
+      - bash scripts/make-dmg.sh
 
   run:
     desc: 빌드된 .app 실행
