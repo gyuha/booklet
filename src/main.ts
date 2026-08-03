@@ -17,6 +17,7 @@ type AppState = {
   lineHeight: number;
   letterSpacing: number;
   margin: number;
+  bold: boolean;
 };
 
 const MIN_SCALE = 0.6;
@@ -50,6 +51,7 @@ let state: AppState = {
   lineHeight: 1.7,
   letterSpacing: 0,
   margin: 48,
+  bold: false,
 };
 let currentPath: string | null = null;
 let bookLoaded = false;
@@ -78,6 +80,7 @@ const typography = (): Typography => ({
   lineHeight: state.lineHeight,
   letterSpacing: state.letterSpacing,
   margin: state.margin,
+  bold: state.bold,
 });
 
 function applyTypography() {
@@ -141,6 +144,7 @@ function renderToc() {
 // ─────────────────────────── 설정 컨트롤 ───────────────────────────
 
 const fontSelect = document.querySelector<HTMLSelectElement>("#set-font")!;
+const boldToggle = document.querySelector<HTMLInputElement>("#set-bold")!;
 
 type Slider = {
   input: HTMLInputElement;
@@ -189,6 +193,7 @@ function syncControls() {
     s.output.textContent = s.format(v);
   }
   fontSelect.value = state.fontFamily ?? "";
+  boldToggle.checked = state.bold;
 }
 
 function buildFontSelect() {
@@ -220,6 +225,12 @@ for (const s of sliders) {
 
 fontSelect.addEventListener("change", () => {
   state.fontFamily = fontSelect.value || null;
+  applyTypography();
+  scheduleSave();
+});
+
+boldToggle.addEventListener("change", () => {
+  state.bold = boldToggle.checked;
   applyTypography();
   scheduleSave();
 });

@@ -458,6 +458,91 @@ test("타이포그래피 설정이 본문에 반영된다", async ({ page }) => 
   }
 });
 
+// "굵게" 설정. 슬라이더가 아니라 토글인 이유는 reader.ts 의 Typography.bold 주석에 있다 —
+// 번들 글꼴이 단일 웨이트라 굵기가 **엔진의 합성 볼드**에서 나오고, 실앱 엔진에서 재 보니
+// 100·300·400 / 600·700·900 두 덩어리로만 갈렸다.
+//
+// **끈 상태에서 400 을 강제하지 않는지도 함께 본다.** 강제하면 책이 지정한 제목·강조의
+// 굵기까지 눌린다 — 그래서 끄면 아무 규칙도 주입하지 않는 것이 맞고, 그 경우 본문은
+// 책이 정한 값(대개 400)을 그대로 쓴다.
+test("굵게 설정이 본문에 반영되고 끄면 되돌아온다", async ({ page }) => {
+  const bodyWeight = async () => {
+    const frames = page.frames().filter((f) => f !== page.mainFrame());
+    for (const f of frames) {
+      const v = await f
+        .evaluate(() => {
+          const p = document.querySelector("p");
+          if (!p || (document.body.textContent ?? "").length < 200) return null;
+          // **우리가 주입한 시트**를 찾아 거기에 굵기 규칙이 있는지 본다.
+          // `700` 문자열만 찾으면 "끈 상태에서 400 을 강제하는" 회귀를 못 잡는다
+          // (실제로 무력화 테스트에서 통과해 버려 이 방식으로 바꿨다).
+          // 우리 시트는 번들 글꼴 @font-face 를 담고 있어 책 CSS 와 구별된다.
+          const ourSheet = Array.from(document.styleSheets).find((sh) => {
+            try {
+              return Array.from(sh.cssRules).some((r) =>
+                /RIDIBatang Bundled/.test((r as CSSRule).cssText ?? ""),
+              );
+            } catch {
+              return false;
+            }
+          });
+          if (!ourSheet) return null; // 주입 시트를 못 찾으면 판정하지 않는다
+          return {
+            weight: getComputedStyle(p).fontWeight,
+            injected: Array.from(ourSheet.cssRules).some((r) =>
+              /font-weight/i.test((r as CSSRule).cssText ?? ""),
+            ),
+          };
+        })
+        .catch(() => null);
+      if (v) return v;
+    }
+    return null;
+  };
+
+  await page.goto("/check.html");
+  await page.evaluate(() => (window as any).check.openUrl("/fixtures/a.epub"));
+  await expect
+    .poll(() => page.evaluate(() => (window as any).check.openCount), {
+      timeout: 60_000,
+    })
+    .toBe(1);
+
+  const toc: { href: string }[] = await page.evaluate(() =>
+    (window as any).check.toc().map((i: any) => ({ href: i.href })),
+  );
+  for (const item of toc.slice(0, 10)) {
+    await goTo(page, item.href);
+    await page.waitForTimeout(400);
+    if (await bodyWeight()) break;
+  }
+  await expect.poll(bodyWeight, { timeout: 30_000 }).not.toBeNull();
+
+  // (a) 기본값은 꺼짐 — 굵기 규칙을 **아예** 주입하지 않는다(400 강제도 안 된다).
+  const off = (await bodyWeight())!;
+  expect(
+    off.injected,
+    "굵게가 꺼졌는데 주입 시트에 font-weight 규칙이 있다 — 책이 정한 제목·강조 굵기를 누른다",
+  ).toBe(false);
+
+  // (b) 켜면 본문 계산 굵기가 700 이 된다.
+  await page.evaluate(() => (window as any).check.setTypography({ bold: true }));
+  await expect
+    .poll(async () => (await bodyWeight())?.weight, { timeout: 20_000 })
+    .toBe("700");
+  expect((await bodyWeight())!.injected, "켰는데 굵기 규칙이 없다").toBe(true);
+
+  // (c) 끄면 규칙이 사라지고 굵기가 되돌아온다.
+  await page.evaluate(() => (window as any).check.setTypography({ bold: false }));
+  await expect
+    .poll(async () => (await bodyWeight())?.injected, { timeout: 20_000 })
+    .toBe(false);
+  expect(
+    (await bodyWeight())!.weight,
+    "껐는데 본문 굵기가 원래대로 돌아오지 않았다",
+  ).toBe(off.weight);
+});
+
 // 읽기 진행률 인디게이터가 하단에서 실제로 갱신되는가.
 //
 // 인디게이터는 앱 크롬이라 이 하네스에서는 `check.html` 의 대역을 본다. 다만 갱신은

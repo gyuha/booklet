@@ -268,3 +268,15 @@ foliate-view {
   font: inherit;
   font-size: 0.85rem;
 }
+
+/* 체크박스는 이름 옆에 둔다 — .field-name 이 space-between 이라 라벨과 상자가 양 끝으로
+   갈리는데, 슬라이더처럼 아래 줄을 차지할 이유가 없다. */
+.field-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.field-toggle .field-name {
+  margin-bottom: 0;
+}

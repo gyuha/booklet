@@ -29,6 +29,9 @@ pub struct AppState {
     pub letter_spacing: f64,
     /// 본문 양쪽 여백(px). 48 = foliate paginator 기본값.
     pub margin: f64,
+    /// 본문을 굵게. 단계가 아니라 on/off 인 이유는 `src/reader.ts` 의 `Typography.bold` 참조
+    /// (번들 글꼴이 단일 웨이트라 굵기가 엔진 합성 볼드에서 나오고, 실측상 두 단계뿐이다).
+    pub bold: bool,
 }
 
 impl Default for AppState {
@@ -41,6 +44,7 @@ impl Default for AppState {
             line_height: 1.7,
             letter_spacing: 0.0,
             margin: 48.0,
+            bold: false,
         }
     }
 }
@@ -85,6 +89,7 @@ mod tests {
             line_height: 2.05,
             letter_spacing: 0.03,
             margin: 96.0,
+            bold: true,
         };
 
         save(&path, &original).expect("save 실패");

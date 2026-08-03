@@ -29,6 +29,16 @@ export type Typography = {
   letterSpacing: number;
   /** px 단위, 본문 양쪽 여백 */
   margin: number;
+  /**
+   * 본문을 굵게.
+   *
+   * **단계가 아니라 on/off 인 것은 실측 결과다.** 번들 글꼴(리디바탕)은 웨이트가 하나뿐이라
+   * 실제 굵기 변화는 엔진의 **합성 볼드**에서 나오는데, 실앱 엔진(WebKit)에서 재 보니
+   * `100·300·400` 이 한 덩어리, `600·700·900` 이 한 덩어리로 **두 단계로만** 갈렸다
+   * (잉크량 2,249,468 → 3,272,509 = +45%, 폭 609.28 → 627.06). 슬라이더를 놓으면 여섯 칸
+   * 중 두 칸만 다른 컨트롤이 된다.
+   */
+  bold: boolean;
 };
 
 export const DEFAULT_TYPOGRAPHY: Typography = {
@@ -37,6 +47,7 @@ export const DEFAULT_TYPOGRAPHY: Typography = {
   lineHeight: 1.7,
   letterSpacing: 0,
   margin: 48,
+  bold: false,
 };
 
 // 글꼴을 강제하려면 epub 자체 CSS 를 이겨야 하므로 !important 가 필요하다.
@@ -78,8 +89,21 @@ const bookCss = (t: Typography) => {
     src: url("${BUNDLED_FONT_SRC}") format("woff2");
     font-display: block;
   }
-  html { font-size: ${Math.round(t.fontScale * 100)}%; }
+  html {
+    font-size: ${Math.round(t.fontScale * 100)}%;
+    /* macOS 기본값(subpixel-antialiased)은 획을 눈에 띄게 두껍게 렌더한다 —
+       "본문에 bold 가 걸린 것 같다" 는 인상의 원인이었다(실측으로 bold 는 없었다:
+       body·p·html 전부 계산 굵기 400, 책 CSS 에 font-weight 규칙 없음).
+       상속되는 속성이라 html 한 곳이면 본문 전체가 따라온다.
+       두께가 도로 필요해지면 이 한 줄만 지우면 된다. */
+    -webkit-font-smoothing: antialiased;
+  }
   ${FONT_TARGETS} { font-family: "${family}" !important; }
+  ${
+    // 켰을 때만 규칙을 낸다. 끈 상태에서 400 을 강제하면 책이 지정한 제목·강조의 굵기까지
+    // 눌러 버린다 — 끄면 아무것도 주입하지 않는 것이 원래 상태다.
+    t.bold ? `${FONT_TARGETS} { font-weight: 700 !important; }` : ""
+  }
   p, li, blockquote, dd {
     line-height: ${t.lineHeight};
     letter-spacing: ${t.letterSpacing}em;

@@ -59,6 +59,13 @@
           <span class="field-name">여백 <output id="out-margin"></output></span>
           <input id="set-margin" type="range" min="0" max="160" step="8" />
         </label>
+
+        <!-- 굵기는 슬라이더가 아니라 토글이다 — 번들 글꼴은 단일 웨이트라 엔진의 합성
+             볼드에 의존하는데, 실측상 두 단계로만 갈린다(reader.ts 의 Typography.bold). -->
+        <label class="field field-toggle">
+          <span class="field-name">굵게</span>
+          <input id="set-bold" type="checkbox" />
+        </label>
       </div>
     </aside>
 
