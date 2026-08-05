@@ -5,6 +5,13 @@ macOS용 개인 epub 뷰어. **파일 하나를 열어 읽는 것**에만 집중
 Tauri v2 + vanilla TypeScript로 만들었고, 렌더링은 [foliate-js](https://github.com/johnfactotum/foliate-js)를
 커밋 고정으로 벤더링해 쓴다.
 
+<p align="center">
+  <img src="screen.png" alt="booklet에 epub 한 권이 열려 있는 화면" width="420">
+</p>
+
+읽는 동안 화면에는 본문 외에 아무것도 없다. 목차·설정을 여는 햄버거 버튼은 마우스를 올릴
+때까지 나타나지 않고, 창 하단 가장자리의 진행률 바와 그 위 오른쪽의 퍼센트만 남는다.
+
 ## 하는 일 / 하지 않는 일
 
 | 한다 | 하지 않는다 |
